@@ -1,0 +1,426 @@
+pragma solidity ^0.8.20;
+
+import {IERC20} from "forge-std/interfaces/IERC20.sol";
+
+import {MyShops} from "./MyShops.sol";
+
+interface ICommunityNFTMint {
+    function mint(address to, string calldata uri, bool soulbound) external returns (uint256);
+}
+
+interface IMyShopItemAction {
+    function execute(
+        address buyer,
+        address recipient,
+        uint256 itemId,
+        uint256 shopId,
+        uint256 quantity,
+        bytes calldata actionData,
+        bytes calldata extraData
+    ) external payable;
+}
+
+contract MyShopItems {
+    MyShops public shops;
+    address public owner;
+
+    address public riskSigner;
+    address public serialSigner;
+
+    uint256 public constant DEFAULT_MAX_ITEMS_PER_SHOP = 5;
+
+    mapping(address => mapping(uint256 => bool)) public usedNonces;
+    mapping(address => bool) public allowedActions;
+
+    uint256 public itemCount;
+
+    struct Item {
+        uint256 shopId;
+        address payToken;
+        uint256 unitPrice;
+        address nftContract;
+        bool soulbound;
+        string tokenURI;
+        address action;
+        bytes actionData;
+        bool requiresSerial;
+        bool active;
+    }
+
+    struct PurchaseContext {
+        address buyer;
+        address recipient;
+        uint256 itemId;
+        uint256 shopId;
+        uint256 quantity;
+    }
+
+    struct PurchaseRecord {
+        uint256 itemId;
+        uint256 shopId;
+        address buyer;
+        address recipient;
+        uint256 quantity;
+        address payToken;
+        uint256 payAmount;
+        uint256 platformFeeAmount;
+        bytes32 serialHash;
+        uint256 firstTokenId;
+    }
+
+    struct AddItemParams {
+        uint256 shopId;
+        address payToken;
+        uint256 unitPrice;
+        address nftContract;
+        bool soulbound;
+        string tokenURI;
+        address action;
+        bytes actionData;
+        bool requiresSerial;
+        uint256 maxItems;
+        uint256 deadline;
+        uint256 nonce;
+        bytes signature;
+    }
+
+    mapping(uint256 => Item) public items;
+    mapping(uint256 => uint256) public shopItemCount;
+
+    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+    event RiskSignerUpdated(address indexed signer);
+    event SerialSignerUpdated(address indexed signer);
+    event ActionAllowed(address indexed action, bool allowed);
+    event ItemAdded(uint256 indexed itemId, uint256 indexed shopId, address indexed shopOwner);
+    event ItemStatusChanged(uint256 indexed itemId, bool active);
+    event Purchased(
+        uint256 indexed itemId,
+        uint256 indexed shopId,
+        address indexed buyer,
+        address recipient,
+        uint256 quantity,
+        address payToken,
+        uint256 payAmount,
+        uint256 platformFeeAmount,
+        bytes32 serialHash,
+        uint256 firstTokenId
+    );
+
+    error NotOwner();
+    error InvalidAddress();
+    error NotShopOwner();
+    error ShopPaused();
+    error ItemNotFound();
+    error ItemInactive();
+    error InvalidPayment();
+    error TransferFailed();
+    error MaxItemsReached();
+    error InvalidSignature();
+    error SignatureExpired();
+    error NonceUsed();
+    error SerialRequired();
+    error ActionNotAllowed();
+
+    constructor(address shops_, address riskSigner_, address serialSigner_) {
+        if (shops_ == address(0)) revert InvalidAddress();
+        shops = MyShops(shops_);
+        owner = msg.sender;
+        riskSigner = riskSigner_;
+        serialSigner = serialSigner_;
+        emit OwnershipTransferred(address(0), msg.sender);
+        emit RiskSignerUpdated(riskSigner_);
+        emit SerialSignerUpdated(serialSigner_);
+    }
+
+    modifier onlyOwner() {
+        if (msg.sender != owner) revert NotOwner();
+        _;
+    }
+
+    function transferOwnership(address newOwner) external onlyOwner {
+        if (newOwner == address(0)) revert InvalidAddress();
+        emit OwnershipTransferred(owner, newOwner);
+        owner = newOwner;
+    }
+
+    function setRiskSigner(address signer) external onlyOwner {
+        riskSigner = signer;
+        emit RiskSignerUpdated(signer);
+    }
+
+    function setSerialSigner(address signer) external onlyOwner {
+        serialSigner = signer;
+        emit SerialSignerUpdated(signer);
+    }
+
+    function setActionAllowed(address action, bool allowed) external onlyOwner {
+        allowedActions[action] = allowed;
+        emit ActionAllowed(action, allowed);
+    }
+
+    function setItemActive(uint256 itemId, bool active) external {
+        Item storage item = items[itemId];
+        if (!item.active && item.shopId == 0) revert ItemNotFound();
+        (address shopOwner,,,) = shops.shops(item.shopId);
+        if (shopOwner != msg.sender && msg.sender != owner) revert NotShopOwner();
+        item.active = active;
+        emit ItemStatusChanged(itemId, active);
+    }
+
+    function addItem(AddItemParams calldata p) external returns (uint256 itemId) {
+        (address shopOwner,,, bool shopPaused) = shops.shops(p.shopId);
+        if (shopOwner == address(0)) revert InvalidAddress();
+        if (shopPaused) revert ShopPaused();
+        if (shopOwner != msg.sender) revert NotShopOwner();
+        if (p.nftContract == address(0) || p.unitPrice == 0) revert InvalidAddress();
+        if (p.action != address(0) && !allowedActions[p.action]) revert ActionNotAllowed();
+
+        _enforceItemLimit(shopOwner, p.shopId, p.maxItems, p.deadline, p.nonce, p.signature);
+
+        address feeToken = shops.listingFeeToken();
+        uint256 feeAmount = shops.listingFeeAmount();
+        if (feeAmount > 0) {
+            bool ok = IERC20(feeToken).transferFrom(msg.sender, shops.platformTreasury(), feeAmount);
+            if (!ok) revert TransferFailed();
+        }
+
+        itemId = ++itemCount;
+        items[itemId] = Item({
+            shopId: p.shopId,
+            payToken: p.payToken,
+            unitPrice: p.unitPrice,
+            nftContract: p.nftContract,
+            soulbound: p.soulbound,
+            tokenURI: p.tokenURI,
+            action: p.action,
+            actionData: p.actionData,
+            requiresSerial: p.requiresSerial,
+            active: true
+        });
+        shopItemCount[p.shopId] += 1;
+
+        emit ItemAdded(itemId, p.shopId, msg.sender);
+    }
+
+    function buy(uint256 itemId, uint256 quantity, address recipient, bytes calldata extraData)
+        external
+        payable
+        returns (uint256 firstTokenId)
+    {
+        if (quantity == 0) revert InvalidPayment();
+        if (recipient == address(0)) revert InvalidAddress();
+
+        Item storage item = items[itemId];
+        if (!item.active && item.shopId == 0) revert ItemNotFound();
+        if (!item.active) revert ItemInactive();
+
+        (, address shopTreasury,, bool shopPaused) = shops.shops(item.shopId);
+        if (shopPaused) revert ShopPaused();
+
+        bytes32 serialHash = bytes32(0);
+        if (item.requiresSerial) {
+            serialHash = _verifySerial(itemId, msg.sender, extraData);
+        }
+
+        uint256 payAmount;
+        uint256 platformFeeAmount;
+        {
+            payAmount = item.unitPrice * quantity;
+            platformFeeAmount = (payAmount * shops.platformFeeBps()) / 10000;
+            _collectPayment(item.payToken, payAmount, platformFeeAmount, shopTreasury);
+        }
+
+        firstTokenId = _mintNft(item.nftContract, recipient, item.tokenURI, item.soulbound, quantity);
+
+        {
+            PurchaseContext memory ctx = PurchaseContext({
+                buyer: msg.sender, recipient: recipient, itemId: itemId, shopId: item.shopId, quantity: quantity
+            });
+            _executeAction(item.action, ctx, item.actionData, extraData);
+        }
+
+        PurchaseRecord memory rec = PurchaseRecord({
+            itemId: itemId,
+            shopId: item.shopId,
+            buyer: msg.sender,
+            recipient: recipient,
+            quantity: quantity,
+            payToken: item.payToken,
+            payAmount: payAmount,
+            platformFeeAmount: platformFeeAmount,
+            serialHash: serialHash,
+            firstTokenId: firstTokenId
+        });
+        _emitPurchased(rec);
+    }
+
+    function _emitPurchased(PurchaseRecord memory rec) internal {
+        emit Purchased(
+            rec.itemId,
+            rec.shopId,
+            rec.buyer,
+            rec.recipient,
+            rec.quantity,
+            rec.payToken,
+            rec.payAmount,
+            rec.platformFeeAmount,
+            rec.serialHash,
+            rec.firstTokenId
+        );
+    }
+
+    function _collectPayment(address payToken, uint256 payAmount, uint256 platformFeeAmount, address shopTreasury)
+        internal
+    {
+        uint256 shopAmount = payAmount - platformFeeAmount;
+        address platformTreasury = shops.platformTreasury();
+
+        if (payToken == address(0)) {
+            if (msg.value != payAmount) revert InvalidPayment();
+            _sendEth(platformTreasury, platformFeeAmount);
+            _sendEth(shopTreasury, shopAmount);
+        } else {
+            if (msg.value != 0) revert InvalidPayment();
+            IERC20 token = IERC20(payToken);
+            bool okPull = token.transferFrom(msg.sender, address(this), payAmount);
+            if (!okPull) revert TransferFailed();
+            bool okFee = token.transfer(platformTreasury, platformFeeAmount);
+            if (!okFee) revert TransferFailed();
+            bool okShop = token.transfer(shopTreasury, shopAmount);
+            if (!okShop) revert TransferFailed();
+        }
+    }
+
+    function _mintNft(address nftContract, address recipient, string storage uri, bool soulbound, uint256 quantity)
+        internal
+        returns (uint256 firstTokenId)
+    {
+        for (uint256 i = 0; i < quantity; i++) {
+            uint256 tokenId = ICommunityNFTMint(nftContract).mint(recipient, uri, soulbound);
+            if (i == 0) firstTokenId = tokenId;
+        }
+    }
+
+    function _executeAction(
+        address action,
+        PurchaseContext memory ctx,
+        bytes storage actionData,
+        bytes calldata extraData
+    ) internal {
+        if (action == address(0)) return;
+        IMyShopItemAction(action).execute{value: 0}(
+            ctx.buyer, ctx.recipient, ctx.itemId, ctx.shopId, ctx.quantity, actionData, extraData
+        );
+    }
+
+    function _enforceItemLimit(
+        address shopOwner,
+        uint256 shopId,
+        uint256 maxItems,
+        uint256 deadline,
+        uint256 nonce,
+        bytes calldata signature
+    ) internal {
+        uint256 limit = DEFAULT_MAX_ITEMS_PER_SHOP;
+
+        if (maxItems > 0) {
+            _useNonce(shopOwner, nonce);
+            if (block.timestamp > deadline) revert SignatureExpired();
+            bytes32 digest = _hashTypedDataV4(_hashRiskAllowance(shopOwner, maxItems, deadline, nonce));
+            if (_recover(digest, signature) != riskSigner) revert InvalidSignature();
+            limit = maxItems;
+        }
+
+        if (shopItemCount[shopId] >= limit) revert MaxItemsReached();
+    }
+
+    function _verifySerial(uint256 itemId, address buyer, bytes calldata extraData)
+        internal
+        returns (bytes32 serialHash)
+    {
+        if (extraData.length == 0) revert SerialRequired();
+        (bytes32 hash_, uint256 deadline, uint256 nonce, bytes memory sig) =
+            abi.decode(extraData, (bytes32, uint256, uint256, bytes));
+        serialHash = hash_;
+        _useNonce(buyer, nonce);
+        if (block.timestamp > deadline) revert SignatureExpired();
+        bytes32 digest = _hashTypedDataV4(_hashSerialPermit(itemId, buyer, serialHash, deadline, nonce));
+        if (_recover(digest, sig) != serialSigner) revert InvalidSignature();
+    }
+
+    function _useNonce(address user, uint256 nonce) internal {
+        if (usedNonces[user][nonce]) revert NonceUsed();
+        usedNonces[user][nonce] = true;
+    }
+
+    function _sendEth(address to, uint256 amount) internal {
+        (bool ok,) = to.call{value: amount}("");
+        if (!ok) revert TransferFailed();
+    }
+
+    function _domainSeparatorV4() internal view returns (bytes32) {
+        return keccak256(
+            abi.encode(
+                keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
+                keccak256(bytes("MyShop")),
+                keccak256(bytes("1")),
+                block.chainid,
+                address(this)
+            )
+        );
+    }
+
+    function _hashTypedDataV4(bytes32 structHash) internal view returns (bytes32) {
+        return keccak256(abi.encodePacked("\x19\x01", _domainSeparatorV4(), structHash));
+    }
+
+    function _hashRiskAllowance(address shopOwner, uint256 maxItems, uint256 deadline, uint256 nonce)
+        internal
+        pure
+        returns (bytes32)
+    {
+        return keccak256(
+            abi.encode(
+                keccak256("RiskAllowance(address shopOwner,uint256 maxItems,uint256 deadline,uint256 nonce)"),
+                shopOwner,
+                maxItems,
+                deadline,
+                nonce
+            )
+        );
+    }
+
+    function _hashSerialPermit(uint256 itemId, address buyer, bytes32 serialHash, uint256 deadline, uint256 nonce)
+        internal
+        pure
+        returns (bytes32)
+    {
+        return keccak256(
+            abi.encode(
+                keccak256(
+                    "SerialPermit(uint256 itemId,address buyer,bytes32 serialHash,uint256 deadline,uint256 nonce)"
+                ),
+                itemId,
+                buyer,
+                serialHash,
+                deadline,
+                nonce
+            )
+        );
+    }
+
+    function _recover(bytes32 digest, bytes memory signature) internal pure returns (address) {
+        if (signature.length != 65) return address(0);
+        bytes32 r;
+        bytes32 s;
+        uint8 v;
+        assembly {
+            r := mload(add(signature, 0x20))
+            s := mload(add(signature, 0x40))
+            v := byte(0, mload(add(signature, 0x60)))
+        }
+        if (v < 27) v += 27;
+        if (v != 27 && v != 28) return address(0);
+        return ecrecover(digest, v, r, s);
+    }
+}
