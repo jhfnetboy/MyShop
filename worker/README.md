@@ -4,7 +4,7 @@
 
 ```bash
 cd worker
-npm install
+pnpm install
 ```
 
 ## Run
@@ -18,7 +18,7 @@ cp .env.example .env
 Start:
 
 ```bash
-npm run dev
+pnpm run dev
 ```
 
 ## Modes

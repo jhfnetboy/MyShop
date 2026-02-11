@@ -117,3 +117,5 @@ sequenceDiagram
 
 - 架构与流程说明：[docs/architecture.md](file:///Users/jason/Dev/crypto-projects/MyShop/docs/architecture.md)
 - Worker（监听/签名/通知）使用说明：[docs/worker.md](file:///Users/jason/Dev/crypto-projects/MyShop/docs/worker.md)
+- 本地一键演示：[docs/demo_local.md](file:///Users/jason/Dev/crypto-projects/MyShop/docs/demo_local.md)
+- 前端最小闭环：[frontend/README.md](file:///Users/jason/Dev/crypto-projects/MyShop/frontend/README.md)

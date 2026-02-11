@@ -20,8 +20,8 @@
 ```bash
 cd worker
 cp .env.example .env
-npm install
-npm run dev
+pnpm install
+pnpm run dev
 ```
 
 ## 配置项（.env）

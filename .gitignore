@@ -7,3 +7,8 @@ node_modules/
 **/.venv/
 **/__pycache__/
 
+**/dist/
+demo/demo.json
+demo/worker.log
+contracts/broadcast/
+contracts/cache/
