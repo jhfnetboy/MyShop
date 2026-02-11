@@ -37,3 +37,23 @@ npm run dev
 - `GET /health`
 - `GET /serial-permit?itemId=&buyer=&serial=&deadline=&nonce=`
 - `GET /risk-allowance?shopOwner=&maxItems=&deadline=&nonce=`
+
+## Serial Issuer (optional)
+
+If `SERIAL_ISSUER_URL` is set, `/serial-permit` can omit `serial` and `serialHash`, and the server will POST:
+
+```json
+{ "buyer": "0x...", "itemId": "123", "context": "..." }
+```
+
+Expected response JSON should include either:
+
+```json
+{ "serial": "SERIAL-001" }
+```
+
+or:
+
+```json
+{ "serialHash": "0x..." }
+```

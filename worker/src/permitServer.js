@@ -13,6 +13,7 @@ export async function startPermitServer({
   itemsAddress,
   serialSignerPrivateKey,
   riskSignerPrivateKey,
+  serialIssuerUrl,
   port
 }) {
   const publicClient = createPublicClient({
@@ -54,7 +55,13 @@ export async function startPermitServer({
         const deadline = BigInt(_get(url, "deadline"));
         const nonce = await _resolveNonce(publicClient, itemsAddress, buyer, url.searchParams.get("nonce"));
 
-        const serialHash = _resolveSerialHash(url);
+        const serialResult = await _resolveSerialHash({
+          url,
+          serialIssuerUrl,
+          buyer,
+          itemId
+        });
+        const serialHash = serialResult.serialHash;
 
         const signature = await walletClients.serial.signTypedData({
           domain: { name: "MyShop", version: "1", chainId: chain.id, verifyingContract: getAddress(itemsAddress) },
@@ -81,6 +88,7 @@ export async function startPermitServer({
           JSON.stringify({
             buyer,
             itemId: itemId.toString(),
+            serial: serialResult.serial,
             serialHash,
             deadline: deadline.toString(),
             nonce: nonce.toString(),
@@ -160,10 +168,35 @@ async function _resolveNonce(publicClient, itemsAddress, user, nonceParam) {
   throw new Error("No free nonce found within 0..999");
 }
 
-function _resolveSerialHash(url) {
+async function _resolveSerialHash({ url, serialIssuerUrl, buyer, itemId }) {
   const serialHashParam = url.searchParams.get("serialHash");
-  if (serialHashParam) return serialHashParam;
-  const serial = _get(url, "serial");
-  return keccak256(toBytes(serial));
+  if (serialHashParam) return { serial: null, serialHash: serialHashParam };
+
+  const serialParam = url.searchParams.get("serial");
+  if (serialParam) return { serial: serialParam, serialHash: keccak256(toBytes(serialParam)) };
+
+  if (!serialIssuerUrl) throw new Error("Missing query param: serial (or set SERIAL_ISSUER_URL)");
+
+  const issued = await _issueSerial(serialIssuerUrl, {
+    buyer,
+    itemId: itemId.toString(),
+    context: url.searchParams.get("context")
+  });
+
+  if (issued.serialHash) return { serial: issued.serial ?? null, serialHash: issued.serialHash };
+  if (issued.serial) return { serial: issued.serial, serialHash: keccak256(toBytes(issued.serial)) };
+  throw new Error("SERIAL_ISSUER_URL response must include serial or serialHash");
 }
 
+async function _issueSerial(serialIssuerUrl, payload) {
+  const res = await fetch(serialIssuerUrl, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+
+  if (!res.ok) throw new Error(`SERIAL_ISSUER_URL error: HTTP ${res.status}`);
+  const json = await res.json();
+  if (json == null || typeof json !== "object") throw new Error("SERIAL_ISSUER_URL returned non-object JSON");
+  return json;
+}

@@ -25,6 +25,7 @@ const lookbackBlocks = Number(optionalEnv("LOOKBACK_BLOCKS", "50"));
 
 const serialSignerPrivateKey = optionalEnv("SERIAL_SIGNER_PRIVATE_KEY", "");
 const riskSignerPrivateKey = optionalEnv("RISK_SIGNER_PRIVATE_KEY", "");
+const serialIssuerUrl = optionalEnv("SERIAL_ISSUER_URL", "");
 const port = Number(optionalEnv("PORT", "8787"));
 
 if (mode === "watch" || mode === "both") {
@@ -55,6 +56,7 @@ if (mode === "permit" || mode === "both") {
     itemsAddress,
     serialSignerPrivateKey: serialSignerPrivateKey ? normalizePrivateKey(serialSignerPrivateKey) : null,
     riskSignerPrivateKey: riskSignerPrivateKey ? normalizePrivateKey(riskSignerPrivateKey) : null,
+    serialIssuerUrl: serialIssuerUrl || null,
     port
   })
     .then(({ port: actualPort }) => {
