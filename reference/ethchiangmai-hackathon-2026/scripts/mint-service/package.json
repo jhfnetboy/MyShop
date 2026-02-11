@@ -1,0 +1,23 @@
+{
+  "name": "mint-service",
+  "version": "1.0.0",
+  "description": "",
+  "main": "mint.ts",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "viem": "^2.7.1",
+    "dotenv": "^16.3.1",
+    "yargs": "^17.7.2"
+  },
+  "devDependencies": {
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.3",
+    "@types/node": "^20.11.0",
+    "@types/yargs": "^17.0.32"
+  }
+}

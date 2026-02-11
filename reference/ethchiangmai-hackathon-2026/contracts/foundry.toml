@@ -1,0 +1,15 @@
+[profile.default]
+src = "src"
+out = "out"
+libs = ["lib"]
+remappings = [
+    "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/"
+]
+fs_permissions = [{ access = "read", path = "./data" }]
+
+[rpc_endpoints]
+op-sepolia = "${OP_SEPOLIA_RPC_URL}"
+
+[profile.default.rpc_storage_caching]
+chains = 'all'
+endpoints = 'all'
