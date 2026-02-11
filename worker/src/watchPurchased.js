@@ -1,10 +1,10 @@
 import { decodeEventLog, getAddress, parseAbiItem } from "viem";
 import { http, createPublicClient } from "viem";
 
-import { myShopItemsAbi } from "./abi.js";
+import { myShopItemsAbi, myShopsAbi } from "./abi.js";
 
 const purchasedEvent = parseAbiItem(
-  "event Purchased(uint256 indexed itemId,uint256 shopId,address indexed buyer,address recipient,uint256 quantity,address payToken,uint256 payAmount,uint256 platformFeeAmount,bytes32 serialHash,uint256 firstTokenId)"
+  "event Purchased(uint256 indexed itemId,uint256 indexed shopId,address indexed buyer,address recipient,uint256 quantity,address payToken,uint256 payAmount,uint256 platformFeeAmount,bytes32 serialHash,uint256 firstTokenId)"
 );
 
 export async function watchPurchased({
@@ -22,6 +22,7 @@ export async function watchPurchased({
   });
 
   const address = getAddress(itemsAddress);
+  let cachedShopsAddress = null;
 
   let lastBlock = await client.getBlockNumber();
   if (lastBlock > BigInt(lookbackBlocks)) lastBlock -= BigInt(lookbackBlocks);
@@ -61,21 +62,36 @@ export async function watchPurchased({
           firstTokenId: decoded.args.firstTokenId?.toString()
         };
 
+        const enriched = await enrichPurchased({
+          client,
+          itemsAddress: address,
+          shopId: decoded.args.shopId,
+          itemId: decoded.args.itemId,
+          cachedShopsAddress
+        });
+        cachedShopsAddress = enriched.cachedShopsAddress;
+
+        const fullPayload = {
+          ...payload,
+          item: enriched.item,
+          shop: enriched.shop
+        };
+
         if (webhookUrl) {
           await fetch(webhookUrl, {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify(payload)
+            body: JSON.stringify(fullPayload)
           });
         }
 
         if (telegram) {
-          await _sendTelegram(telegram, payload);
+          await _sendTelegram(telegram, fullPayload);
         }
 
         if (!webhookUrl && !telegram) {
           process.stdout.write(
-            JSON.stringify(payload, null, 2) + "\n"
+            JSON.stringify(fullPayload, null, 2) + "\n"
           );
         }
       }
@@ -100,7 +116,11 @@ async function _sendTelegram(telegram, payload) {
     `payAmount: ${payload.payAmount}\n` +
     `platformFeeAmount: ${payload.platformFeeAmount}\n` +
     `serialHash: ${payload.serialHash}\n` +
-    `firstTokenId: ${payload.firstTokenId}\n`;
+    `firstTokenId: ${payload.firstTokenId}\n` +
+    `shopTreasury: ${payload.shop?.treasury ?? ""}\n` +
+    `nft: ${payload.item?.nftContract ?? ""}\n` +
+    `tokenURI: ${payload.item?.tokenURI ?? ""}\n` +
+    `action: ${payload.item?.action ?? ""}\n`;
 
   const url = `https://api.telegram.org/bot${telegram.botToken}/sendMessage`;
   await fetch(url, {
@@ -111,4 +131,59 @@ async function _sendTelegram(telegram, payload) {
       text
     })
   });
+}
+
+async function enrichPurchased({ client, itemsAddress, shopId, itemId, cachedShopsAddress }) {
+  const rawItem = await client.readContract({
+    address: itemsAddress,
+    abi: myShopItemsAbi,
+    functionName: "items",
+    args: [itemId]
+  });
+
+  const shopsAddress =
+    cachedShopsAddress ??
+    getAddress(
+      await client.readContract({
+        address: itemsAddress,
+        abi: myShopItemsAbi,
+        functionName: "shops",
+        args: []
+      })
+    );
+
+  const rawShop = await client.readContract({
+    address: shopsAddress,
+    abi: myShopsAbi,
+    functionName: "shops",
+    args: [shopId]
+  });
+
+  return {
+    cachedShopsAddress: shopsAddress,
+    item: {
+      shopId: pick(rawItem, "shopId", 0).toString(),
+      payToken: pick(rawItem, "payToken", 1),
+      unitPrice: pick(rawItem, "unitPrice", 2).toString(),
+      nftContract: pick(rawItem, "nftContract", 3),
+      soulbound: pick(rawItem, "soulbound", 4),
+      tokenURI: pick(rawItem, "tokenURI", 5),
+      action: pick(rawItem, "action", 6),
+      actionData: pick(rawItem, "actionData", 7),
+      requiresSerial: pick(rawItem, "requiresSerial", 8),
+      active: pick(rawItem, "active", 9)
+    },
+    shop: {
+      owner: pick(rawShop, "owner", 0),
+      treasury: pick(rawShop, "treasury", 1),
+      metadataHash: pick(rawShop, "metadataHash", 2),
+      paused: pick(rawShop, "paused", 3)
+    }
+  };
+}
+
+function pick(obj, key, index) {
+  const value = obj?.[key] ?? obj?.[index];
+  if (value === undefined) throw new Error(`Unable to read ${key}`);
+  return value;
 }
