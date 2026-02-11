@@ -27,9 +27,13 @@ npm run dev
 - `MODE=permit` starts an HTTP server that signs EIP-712 permits for `MyShopItems`.
 - `MODE=both` runs both.
 
+## Notifications
+
+- `WEBHOOK_URL` if you want to forward purchase payload to your backend.
+- `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` if you want Telegram messages.
+
 ## Permit Endpoints
 
 - `GET /health`
 - `GET /serial-permit?itemId=&buyer=&serial=&deadline=&nonce=`
 - `GET /risk-allowance?shopOwner=&maxItems=&deadline=&nonce=`
-

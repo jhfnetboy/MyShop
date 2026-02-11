@@ -18,6 +18,8 @@ const chain = {
 };
 
 const webhookUrl = optionalEnv("WEBHOOK_URL", "");
+const telegramBotToken = optionalEnv("TELEGRAM_BOT_TOKEN", "");
+const telegramChatId = optionalEnv("TELEGRAM_CHAT_ID", "");
 const pollIntervalMs = Number(optionalEnv("POLL_INTERVAL_MS", "4000"));
 const lookbackBlocks = Number(optionalEnv("LOOKBACK_BLOCKS", "50"));
 
@@ -32,7 +34,14 @@ if (mode === "watch" || mode === "both") {
     itemsAddress,
     pollIntervalMs,
     lookbackBlocks,
-    webhookUrl: webhookUrl || null
+    webhookUrl: webhookUrl || null,
+    telegram:
+      telegramBotToken && telegramChatId
+        ? {
+            botToken: telegramBotToken,
+            chatId: telegramChatId
+          }
+        : null
   }).catch((e) => {
     process.stderr.write(String(e) + "\n");
     process.exit(1);

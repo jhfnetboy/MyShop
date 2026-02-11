@@ -13,7 +13,8 @@ export async function watchPurchased({
   itemsAddress,
   pollIntervalMs,
   lookbackBlocks,
-  webhookUrl
+  webhookUrl,
+  telegram
 }) {
   const client = createPublicClient({
     chain,
@@ -66,7 +67,13 @@ export async function watchPurchased({
             headers: { "content-type": "application/json" },
             body: JSON.stringify(payload)
           });
-        } else {
+        }
+
+        if (telegram) {
+          await _sendTelegram(telegram, payload);
+        }
+
+        if (!webhookUrl && !telegram) {
           process.stdout.write(
             JSON.stringify(payload, null, 2) + "\n"
           );
@@ -77,4 +84,31 @@ export async function watchPurchased({
     lastBlock = latest + 1n;
     await new Promise((r) => setTimeout(r, pollIntervalMs));
   }
+}
+
+async function _sendTelegram(telegram, payload) {
+  const text =
+    `MyShop Purchased\n` +
+    `chainId: ${payload.chainId}\n` +
+    `tx: ${payload.txHash}\n` +
+    `itemId: ${payload.itemId}\n` +
+    `shopId: ${payload.shopId}\n` +
+    `buyer: ${payload.buyer}\n` +
+    `recipient: ${payload.recipient}\n` +
+    `quantity: ${payload.quantity}\n` +
+    `payToken: ${payload.payToken}\n` +
+    `payAmount: ${payload.payAmount}\n` +
+    `platformFeeAmount: ${payload.platformFeeAmount}\n` +
+    `serialHash: ${payload.serialHash}\n` +
+    `firstTokenId: ${payload.firstTokenId}\n`;
+
+  const url = `https://api.telegram.org/bot${telegram.botToken}/sendMessage`;
+  await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      chat_id: telegram.chatId,
+      text
+    })
+  });
 }
