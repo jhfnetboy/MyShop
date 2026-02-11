@@ -1,0 +1,14 @@
+{
+  "name": "@myshop/worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node src/index.js",
+    "check": "node --check src/index.js && node --check src/watchPurchased.js && node --check src/permitServer.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "viem": "^2.23.2"
+  }
+}
+
