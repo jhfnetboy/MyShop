@@ -55,6 +55,17 @@ let walletClient = null;
 let connectedAddress = null;
 let connectedChainId = null;
 let walletEventsBound = false;
+let activeTxLabel = null;
+
+function setDisabledById(id, disabled) {
+  const node = document.getElementById(id);
+  if (!node) return;
+  node.disabled = !!disabled;
+}
+
+function setDisabledMany(ids, disabled) {
+  for (const id of ids || []) setDisabledById(id, disabled);
+}
 
 function el(tag, attrs = {}, children = []) {
   const node = document.createElement(tag);
@@ -139,6 +150,24 @@ function showTxError(e) {
     parts.push("Fix: switch your wallet network to expectedChainId, or update Config -> CHAIN_ID/RPC URL.");
   }
   setText("txOut", parts.join("\n"));
+}
+
+async function runWriteTx({ label, buttonIds = [], write }) {
+  if (activeTxLabel) throw new Error(`transaction in progress: ${activeTxLabel}`);
+  activeTxLabel = label;
+  setDisabledMany(buttonIds, true);
+  try {
+    setText("txOut", `[${label}] waiting for wallet confirmation...`);
+    const hash = await write();
+    setText("txOut", `[${label}] submitted: ${hash}\nstatus=pending`);
+    const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: 120_000 });
+    const blockNumber = receipt.blockNumber != null ? String(receipt.blockNumber) : "";
+    setText("txOut", `[${label}] confirmed: ${hash}\nstatus=${receipt.status}${blockNumber ? ` block=${blockNumber}` : ""}`);
+    return { hash, receipt };
+  } finally {
+    setDisabledMany(buttonIds, false);
+    activeTxLabel = null;
+  }
 }
 
 function getExpectedChainId() {
@@ -892,14 +921,18 @@ async function approvePayToken() {
   const itemsAddress = requireAddress(val("itemsAddress"), "itemsAddress");
   const payToken = requireAddress(val("buyPayToken"), "buyPayToken");
   const amount = BigInt(val("buyApproveAmount") || "0");
-  const hash = await walletClient.writeContract({
-    address: payToken,
-    abi: erc20Abi,
-    functionName: "approve",
-    args: [itemsAddress, amount],
-    account: connectedAddress
+  await runWriteTx({
+    label: "approve",
+    buttonIds: ["btnApprove", "btnBuy"],
+    write: () =>
+      walletClient.writeContract({
+        address: payToken,
+        abi: erc20Abi,
+        functionName: "approve",
+        args: [itemsAddress, amount],
+        account: connectedAddress
+      })
   });
-  setText("txOut", `approve tx: ${hash}`);
 }
 
 async function buy() {
@@ -911,15 +944,19 @@ async function buy() {
   const extraData = requireHexBytes(val("buyExtraData"), "extraData");
   const ethValue = val("buyEthValue");
 
-  const hash = await walletClient.writeContract({
-    address: itemsAddress,
-    abi: myShopItemsAbi,
-    functionName: "buy",
-    args: [itemId, quantity, recipient, extraData],
-    account: connectedAddress,
-    value: ethValue ? parseEther(ethValue) : undefined
+  await runWriteTx({
+    label: `buy itemId=${itemId.toString()} qty=${quantity.toString()}`,
+    buttonIds: ["btnApprove", "btnBuy"],
+    write: () =>
+      walletClient.writeContract({
+        address: itemsAddress,
+        abi: myShopItemsAbi,
+        functionName: "buy",
+        args: [itemId, quantity, recipient, extraData],
+        account: connectedAddress,
+        value: ethValue ? parseEther(ethValue) : undefined
+      })
   });
-  setText("txOut", `buy tx: ${hash}`);
 }
 
 async function setShopRolesTx() {
@@ -1429,14 +1466,14 @@ async function renderBuyer(container) {
       inputRow("buyer(for permit)", "buyBuyer", connectedAddress || ""),
       inputRow("payToken(for approve)", "buyPayToken"),
       inputRow("approveAmount(uint256)", "buyApproveAmount", "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"),
-      el("button", { text: "Approve", onclick: () => approvePayToken().catch(showTxError) }),
+      el("button", { id: "btnApprove", text: "Approve", onclick: () => approvePayToken().catch(showTxError) }),
       el("h4", { text: "Serial Permit (optional)" }),
       inputRow("serial", "serial", "SERIAL-001"),
       inputRow("deadline(ts)", "serialDeadline", String(Math.floor(Date.now() / 1000) + 3600)),
       inputRow("extraData(hex)", "buyExtraData", "0x"),
       el("button", { text: "Fetch extraData", onclick: () => fetchSerialExtraData().catch(showTxError) }),
       inputRow("ethValue(optional)", "buyEthValue", ""),
-      el("button", { text: "Buy", onclick: () => buy().catch(showTxError) })
+      el("button", { id: "btnBuy", text: "Buy", onclick: () => buy().catch(showTxError) })
     ])
   );
 
