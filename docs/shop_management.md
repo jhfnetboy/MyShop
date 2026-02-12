@@ -12,7 +12,7 @@
 约束：
 
 - 与 shop 相关的角色数据全部由 MyShop 链上合约维护（本设计落在 [MyShops.sol](../contracts/src/MyShops.sol)）。
-- 平台级安全边界不下放：比如 action 白名单仍由平台 owner 控制（见 [MyShopItems.sol](../contracts/src/MyShopItems.sol) 的 `allowedActions`）。
+- 协议级安全边界不下放：比如 action 白名单仍由协议治理者控制（见 [MyShopItems.sol](../contracts/src/MyShopItems.sol) 的 `allowedActions`）。
 
 ---
 
@@ -44,17 +44,17 @@ Shop Owner 默认拥有所有权限（无需显式授予）：`operator == shops
 - `registerShop(...)`：仅 `Registry.hasRole(ROLE_COMMUNITY, msg.sender)`（社区才能开店）
 - `updateShop(shopId, ...)`：shop owner 或 `ROLE_SHOP_ADMIN`
 - `setShopPaused(shopId, paused)`：
-  - 平台 owner 或（shop owner / `ROLE_SHOP_ADMIN`）
+  - 协议治理者 或（shop owner / `ROLE_SHOP_ADMIN`）
 - `setShopRoles(shopId, operator, roles)`：仅 shop owner
 
 ### 3.2 Item 级动作（MyShopItems）
 
 - `addItem(...)`：`ROLE_ITEM_EDITOR`
-- `setItemActive(itemId, active)`：平台 owner 或 `ROLE_ITEM_MAINTAINER`
+- `setItemActive(itemId, active)`：协议治理者 或 `ROLE_ITEM_MAINTAINER`
 - `updateItem(itemId, ...)`：`ROLE_ITEM_EDITOR`
 - `updateItemAction(itemId, action, actionData)`：`ROLE_ITEM_ACTION_EDITOR`
 
-平台级动作（仍是平台 owner）：
+协议级动作（仍是协议治理者）：
 
 - `setActionAllowed(action, allowed)`
 - `setRiskSigner(...)`、`setSerialSigner(...)`
@@ -137,4 +137,3 @@ Shop Owner 默认拥有所有权限（无需显式授予）：`operator == shops
 - 将导出/导入迁移到 worker 的 API（支持分页、增量、校验与签名授权）。
 - 允许 shop owner 旋转 owner（或多签 owner），并保留 operator 角色不变，降低迁移成本。
 - 为 item 页面版本增加事件索引字段（例如 `indexed contentHash`）以便更高效检索。
-

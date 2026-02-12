@@ -7,7 +7,7 @@
 ## 0. 你的原始需求（复述与约束）
 
 - MyShop 作为主要目录，包含：
-  - 合约目录（EVM 合约，包含 MyShop 平台合约、aPNTs/GToken 售卖合约等）
+  - 合约目录（EVM 合约，包含 MyShop 协议合约、aPNTs/GToken 售卖合约等）
   - 前端目录（MyShop 广场，先直接与合约交互）
 - 初期前端直连合约；稳定后提取 API，并整合到 `aastar-sdk`（包含稳定后的合约地址同步）。
 - 一开始需要整合多个 repo 的资产，但不写业务代码，先完成初始化设计与整合设计；同时需要把“参考代码”搬过来（黑客松 repo 的 nft 与 contracts，以及 Telegram bot 自动 mint 的部分）。
@@ -57,7 +57,7 @@
   - Registry（社区注册、Role 管理、元数据）
   - GToken、GTokenStaking、Paymaster 等
   - `aastar-sdk`（对 registry/roles/tokens 的封装，以及后续 MyShop 的 client 扩展）
-- L1：MyShop 链上平台（本 repo 的 contracts）
+- L1：MyShop 链上协议（本 repo 的 contracts）
   - MyShopRegistry / MyShops：店铺注册与权限门控（必须是 COMMUNITY 才能注册）
   - MyShopItems：商品与购买入口，负责原子购买执行
   - Action Modules：购买后动作的可扩展模块（mint token、发 serial、触发 offchain 等）
@@ -73,7 +73,7 @@
 
 ### 2.2 关键边界（避免耦合）
 
-- AAStar Registry 负责“社区身份与角色”；MyShop 只做“消费与售卖平台”。
+- AAStar Registry 负责“社区身份与角色”；MyShop 只做“消费与售卖协议”。
 - MyShop 不直接持有长周期的私钥；任何需要私钥签名的 offchain 行为放在服务端（后续 API 层），并通过签名/nonce/过期时间来约束链上可验证动作。
 - “NFT 销售 + 绑定动作执行”在链上只保证原子性边界内的部分；对于必须调用外部 API 的动作，采用“链上可验证的预签名凭证”来保持原子性，或采用异步最终一致的补偿机制（见第 5 章）。
 
@@ -119,7 +119,7 @@
 
 - `registerShop(...)`：只有社区地址（Community Admin）可注册
 - 店铺元信息：name、description、logoURI、policyURI、treasury（收款地址）
-- 平台费率：成交费率默认 3%，可配置（后续可按商品分类细化；当前先简化）
+- 协议费率：成交费率默认 3%，可配置（后续可按商品分类细化；当前先简化）
 - 防滥用费用：Item 上架费用（listing fee），默认 100 aPNTs，可配置；用于抑制 spam 上架
 - 风控开关：店铺级 pause / item 级 disable
 
@@ -145,7 +145,7 @@
 
 - `buy(itemId, quantity, recipient, extraData)`：统一入口
   - 收款（ETH 或 ERC20 transferFrom）
-  - 扣除成交费率（默认 3%）并按配置分账（平台 treasury / 店铺 treasury）
+  - 扣除成交费率（默认 3%）并按配置分账（协议 treasury / 店铺 treasury）
   - mint NFT 到 recipient
   - 执行 action（例如 mint 50 aPNTs）
   - 全部成功才 emit `Purchased(...)`
@@ -346,9 +346,9 @@ Action 的安全边界：
 你要的“一步完成”与“分步完成”，建议在产品层提供两条路径，但底层都复用 SDK：
 
 - 分步路径（更稳健）：
-  1) 买 GToken（满足 registry 的 stake 要求）
-  2) 用 SDK 调用 registry 注册 community（ROLE_COMMUNITY）
-  3) 回到 MyShop 注册 shop、上架 item、开始售卖
+  1. 买 GToken（满足 registry 的 stake 要求）
+  2. 用 SDK 调用 registry 注册 community（ROLE_COMMUNITY）
+  3. 回到 MyShop 注册 shop、上架 item、开始售卖
 - 一步路径（体验更好，但更复杂）：
   - 用前端或 API orchestrate：
     - 先完成购买/approve（可能包含多笔交易或 4337 批处理）
@@ -413,9 +413,15 @@ Action 的安全边界：
 - M3（Done for demo）：API 提取与索引
   - 已完成：worker（监听 Purchased + payload enrich + 预签名 SerialPermit/RiskAllowance + 可选通知）
   - 已完成：Query API（/shops /items /purchases）+ 内存索引（ENABLE_INDEXER）
+- M3.5（Done for demo）：前端接入 Worker + 角色入口
+  - 已完成：广场（shops/items 列表）优先 Query API，失败回退链上读取
+  - 已完成：买家入口支持串号签名（SerialPermit）与购买闭环
+  - 已完成：店主后台（注册 shop / 配角色 / 上架与维护 item）
+  - 已完成：协议后台（全局费率/签名人/action 白名单等配置入口）
 - M4（Todo）：SDK 整合与地址稳定
-  - MyShop 合约地址进入 `aastar-sdk` 的地址源
-  - `aastar-sdk` 增加 MyShop client（与 registry 角色体系一致）
+  - 合约地址进入 `aastar-sdk` 的地址源（含链选择与环境隔离）
+  - `aastar-sdk` 增加 MyShop client（对齐 registry 角色体系）
+  - 前端从“直连合约”为主逐步演进到“SDK/API 优先”为主
 
 ---
 
@@ -424,5 +430,4 @@ Action 的安全边界：
 - BTC 支付定义：采用 WBTC/TBTC（链上）
 - 序列号强原子：采用“预签名凭证”模式（5.1）
 - aPNTs 的风控强度：发行速率限制与 timelock 是否必须从 Day 1 开始启用
-- 平台费率与分润：Item 上架费用默认 100 aPNTs；成交费率默认 3%（后续可按品类细化）
-
+- 协议费率与分润：Item 上架费用默认 100 aPNTs；成交费率默认 3%（后续可按品类细化）

@@ -6,19 +6,19 @@
 flowchart LR
   subgraph Offchain["Off-chain"]
     UI["前端 / 脚本 / 第三方应用"]
-    RiskSvc["风控签名服务\n(RiskAllowance)"]
-    SerialSvc["串号签发/校验服务\n(SerialPermit)"]
-    Worker["MyShop Worker\n- Purchased 监听\n- Permit 签名 API\n- Webhook/Telegram 通知"]
+    RiskSvc["风控签名服务<br/>(RiskAllowance)"]
+    SerialSvc["串号签发/校验服务<br/>(SerialPermit)"]
+    Worker["MyShop Worker<br/>- Purchased 监听<br/>- Permit 签名 API<br/>- Webhook/Telegram 通知"]
     Webhook["业务后端 Webhook"]
     Tg["Telegram"]
   end
 
   subgraph Onchain["On-chain (EVM)"]
-    Registry["Registry\n(ROLE_COMMUNITY)"]
-    Shops["MyShops\n- 注册 Shop\n- 平台费率/上架费"]
-    Items["MyShopItems\n- 上架 Item\n- 原子购买 buy()"]
-    NFT["CommunityNFT/MockCommunityNFT\nmint(to, uri, soulbound)"]
-    Action["Action 合约\n(可组合能力)"]
+    Registry["Registry<br/>(ROLE_COMMUNITY)"]
+    Shops["MyShops<br/>- 注册 Shop<br/>- 协议费率/上架费"]
+    Items["MyShopItems<br/>- 上架 Item<br/>- 原子购买 buy()"]
+    NFT["CommunityNFT/MockCommunityNFT<br/>mint(to, uri, soulbound)"]
+    Action["Action 合约<br/>(可组合能力)"]
     PayToken["ERC20 / ETH"]
   end
 
@@ -54,7 +54,7 @@ flowchart TB
 
   Shops -->|"依赖 registry.hasRole"| MRegistry
   Items -->|"读取 Shop 配置"| Shops
-  Items -->|"平台费/收款"| MToken
+  Items -->|"协议费/收款"| MToken
   Items -->|"mint NFT"| MNFT
   Items -->|"action 白名单 + execute"| ActMint
   Items -->|"action 白名单 + execute"| ActEvent
@@ -73,14 +73,14 @@ sequenceDiagram
   participant Items as MyShopItems
   participant Shops as MyShops
   participant APNTs as aPNTs(ERC20)
-  participant Treasury as Platform Treasury
+  participant Treasury as Protocol Treasury
 
   Note over ShopOwner,Items: 如果该 shop item 数超过默认阈值，需要 RiskAllowance 签名
   ShopOwner->>Risk: 请求 RiskAllowance(shopOwner,maxItems,deadline,nonce)
   Risk-->>ShopOwner: signature
   ShopOwner->>APNTs: approve(MyShopItems, listingFee)
   ShopOwner->>Items: addItem(params + signature?)
-  Items->>Shops: 读取平台费率/上架费配置
+  Items->>Shops: 读取协议费率/上架费配置
   Items->>APNTs: transferFrom(shopOwner, Treasury, listingFee)
   Items-->>ShopOwner: itemId
 ```
@@ -95,7 +95,7 @@ sequenceDiagram
   participant Shops as MyShops
   participant Pay as PayToken(ERC20/ETH)
   participant ShopTreasury as Shop Treasury
-  participant Treasury as Platform Treasury
+  participant Treasury as Protocol Treasury
   participant NFT as CommunityNFT
   participant Action as Action Contract
 
@@ -130,14 +130,14 @@ sequenceDiagram
 
 - **Shop**
   - 社区注册 Shop（依赖 `Registry.hasRole(ROLE_COMMUNITY)`）
-  - Shop 更新与暂停（owner/平台 owner 权限）
+  - Shop 更新与暂停（owner/协议治理权限）
 - **Item（上架/管理）**
   - ShopOwner 上架商品（listing fee 可配置）
   - 默认风控：单店默认最多 5 个 item；可用 `RiskAllowance` 签名放宽上限
   - Item 上下架（active 开关）
-  - Action 白名单：平台 owner 允许/禁止可执行的 action 合约
+  - Action 白名单：协议治理者 允许/禁止可执行的 action 合约
 - **购买（原子闭环）**
-  - `buy()` 原子完成：收款 + 平台费分润 + mint NFT + execute action
+  - `buy()` 原子完成：收款 + 协议费分润 + mint NFT + execute action
   - 可选串号校验：`requiresSerial=true` 时必须提供 `SerialPermit`（EIP-712 + nonce + deadline）
 - **售卖合约（独立模块）**
   - aPNTsSale / GTokenSale：支持 cap/limits、可暂停、事件上报
@@ -146,6 +146,80 @@ sequenceDiagram
   - Webhook 转发（可选）与 Telegram 通知（可选）
   - Permit 服务：`/serial-permit` 与 `/risk-allowance`
   - Query API：`/shops` `/items` `/purchases` + 内存索引（可配置 `source=index|chain`）
+
+### Worker 三大功能（带全流程示例）
+
+1. Purchased 监听（watch）
+
+- 目标：持续监听 `MyShopItems.Purchased` 事件，并把链上基础字段 + enrich 后的 shop/item 一起输出到 stdout / Webhook / Telegram。
+- 代码入口：[watchPurchased.js](file:///Users/jason/Dev/crypto-projects/MyShop/worker/src/watchPurchased.js)
+
+示例输出（关键字段）：
+
+```json
+{
+  "chainId": 31337,
+  "txHash": "0x...",
+  "blockNumber": 123,
+  "itemId": "1",
+  "shopId": "1",
+  "buyer": "0x...",
+  "recipient": "0x...",
+  "quantity": "1",
+  "payToken": "0x...",
+  "payAmount": "1000",
+  "platformFeeAmount": "30",
+  "serialHash": "0x...",
+  "firstTokenId": "1",
+  "item": {
+    "tokenURI": "ipfs://...",
+    "action": "0x...",
+    "requiresSerial": true,
+    "active": true
+  },
+  "shop": { "owner": "0x...", "treasury": "0x...", "paused": false }
+}
+```
+
+2. Permit 签名 API（permit）
+
+- 目标：给前端/第三方应用提供 EIP-712 签名，链上可验证，避免在前端持有签名私钥。
+- 代码入口：[permitServer.js](file:///Users/jason/Dev/crypto-projects/MyShop/worker/src/permitServer.js)
+
+串号签名（SerialPermit → extraData，供 `buy()` 直接传入）：
+
+```bash
+curl "http://localhost:8787/serial-permit?buyer=0xBuyer&itemId=1&serial=SERIAL-001&deadline=1730000000"
+```
+
+返回：
+
+- `serialHash, nonce, signature, extraData`（extraData 为 ABI 编码后的 bytes）
+
+风险放宽签名（RiskAllowance，供 `addItem()` 在超过默认上架阈值时传入）：
+
+```bash
+curl "http://localhost:8787/risk-allowance?shopOwner=0xShopOwner&maxItems=10&deadline=1730000000"
+```
+
+3. Query API + 内存索引（api）
+
+- 目标：给广场/列表页提供快速查询：shops/items/purchases；优先走内存索引（快），必要时回退链上读取（全）。
+- 代码入口：[apiServer.js](file:///Users/jason/Dev/crypto-projects/MyShop/worker/src/apiServer.js)
+
+示例：
+
+```bash
+curl "http://localhost:8788/shops?cursor=1&limit=20"
+curl "http://localhost:8788/items?cursor=1&limit=50"
+curl "http://localhost:8788/purchases?itemId=1&limit=20&include=enrich"
+```
+
+前端对接（Plaza/Buyer/后台）：
+
+- [main.js](file:///Users/jason/Dev/crypto-projects/MyShop/frontend/src/main.js) 支持两个 URL：
+  - `WORKER_URL`：Permit（/serial-permit, /risk-allowance）
+  - `WORKER_API_URL`：Query（/shops, /items, /purchases），失败时自动回退链上读取
 - **一键演示 & 最小前端**
   - 一条命令本地部署 + 购买 + 输出 Purchased payload（可选附带 Query API 校验）
   - Vite 最小前端：直连合约完成 registerShop / addItem / buy（可选对接 Worker）
