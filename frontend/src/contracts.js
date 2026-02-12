@@ -1,6 +1,27 @@
 export const myShopsAbi = [
   {
     type: "function",
+    name: "transferOwnership",
+    stateMutability: "nonpayable",
+    inputs: [{ name: "newOwner", type: "address" }],
+    outputs: []
+  },
+  {
+    type: "function",
+    name: "owner",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "address" }]
+  },
+  {
+    type: "function",
+    name: "registry",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "address" }]
+  },
+  {
+    type: "function",
     name: "registerShop",
     stateMutability: "nonpayable",
     inputs: [
@@ -30,10 +51,62 @@ export const myShopsAbi = [
   },
   {
     type: "function",
+    name: "platformTreasury",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "address" }]
+  },
+  {
+    type: "function",
     name: "listingFeeAmount",
     stateMutability: "view",
     inputs: [],
     outputs: [{ name: "", type: "uint256" }]
+  },
+  {
+    type: "function",
+    name: "platformFeeBps",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "uint16" }]
+  },
+  {
+    type: "function",
+    name: "shopCount",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "uint256" }]
+  },
+  {
+    type: "function",
+    name: "setRegistry",
+    stateMutability: "nonpayable",
+    inputs: [{ name: "registry_", type: "address" }],
+    outputs: []
+  },
+  {
+    type: "function",
+    name: "setPlatformTreasury",
+    stateMutability: "nonpayable",
+    inputs: [{ name: "treasury", type: "address" }],
+    outputs: []
+  },
+  {
+    type: "function",
+    name: "setListingFee",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "token", type: "address" },
+      { name: "amount", type: "uint256" }
+    ],
+    outputs: []
+  },
+  {
+    type: "function",
+    name: "setPlatformFee",
+    stateMutability: "nonpayable",
+    inputs: [{ name: "feeBps", type: "uint16" }],
+    outputs: []
   },
   {
     type: "function",
@@ -101,6 +174,72 @@ export const myShopsAbi = [
 ];
 
 export const myShopItemsAbi = [
+  {
+    type: "function",
+    name: "transferOwnership",
+    stateMutability: "nonpayable",
+    inputs: [{ name: "newOwner", type: "address" }],
+    outputs: []
+  },
+  {
+    type: "function",
+    name: "owner",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "address" }]
+  },
+  {
+    type: "function",
+    name: "riskSigner",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "address" }]
+  },
+  {
+    type: "function",
+    name: "serialSigner",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "address" }]
+  },
+  {
+    type: "function",
+    name: "setRiskSigner",
+    stateMutability: "nonpayable",
+    inputs: [{ name: "signer", type: "address" }],
+    outputs: []
+  },
+  {
+    type: "function",
+    name: "setSerialSigner",
+    stateMutability: "nonpayable",
+    inputs: [{ name: "signer", type: "address" }],
+    outputs: []
+  },
+  {
+    type: "function",
+    name: "setActionAllowed",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "action", type: "address" },
+      { name: "allowed", type: "bool" }
+    ],
+    outputs: []
+  },
+  {
+    type: "function",
+    name: "allowedActions",
+    stateMutability: "view",
+    inputs: [{ name: "", type: "address" }],
+    outputs: [{ name: "", type: "bool" }]
+  },
+  {
+    type: "function",
+    name: "shops",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "address" }]
+  },
   {
     type: "function",
     name: "itemCount",
