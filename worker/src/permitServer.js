@@ -7,6 +7,13 @@ import { createPublicClient, createWalletClient } from "viem";
 
 import { myShopItemsAbi } from "./abi.js";
 
+class RateLimitError extends Error {
+  constructor(message = "rate_limited") {
+    super(message);
+    this.name = "RateLimitError";
+  }
+}
+
 export async function startPermitServer({
   rpcUrl,
   chain,
@@ -38,6 +45,13 @@ export async function startPermitServer({
       : null
   };
 
+  const limiter = {
+    enabled: process.env.PERMIT_RATE_LIMIT === "0" ? false : true,
+    windowMs: Number(process.env.PERMIT_RATE_LIMIT_WINDOW_MS ?? "60000"),
+    max: Number(process.env.PERMIT_RATE_LIMIT_MAX ?? "120"),
+    buckets: new Map()
+  };
+
   const server = http.createServer(async (req, res) => {
     try {
       if (req.method === "OPTIONS") {
@@ -53,14 +67,12 @@ export async function startPermitServer({
       const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
 
       if (url.pathname === "/health") {
-        res.writeHead(200, {
-          "content-type": "application/json",
-          "access-control-allow-origin": "*",
-          "access-control-allow-methods": "GET,POST,OPTIONS",
-          "access-control-allow-headers": "content-type"
-        });
-        res.end(JSON.stringify({ ok: true }));
+        _json(res, 200, { ok: true });
         return;
+      }
+
+      if (limiter.enabled && (url.pathname === "/serial-permit" || url.pathname === "/risk-allowance")) {
+        _rateLimitOrThrow({ req, url, limiter });
       }
 
       if (url.pathname === "/serial-permit") {
@@ -98,24 +110,17 @@ export async function startPermitServer({
           [serialHash, deadline, nonce, signature]
         );
 
-        res.writeHead(200, {
-          "content-type": "application/json",
-          "access-control-allow-origin": "*",
-          "access-control-allow-methods": "GET,POST,OPTIONS",
-          "access-control-allow-headers": "content-type"
+        _json(res, 200, {
+          ok: true,
+          buyer,
+          itemId: itemId.toString(),
+          serial: serialResult.serial,
+          serialHash,
+          deadline: deadline.toString(),
+          nonce: nonce.toString(),
+          signature,
+          extraData
         });
-        res.end(
-          JSON.stringify({
-            buyer,
-            itemId: itemId.toString(),
-            serial: serialResult.serial,
-            serialHash,
-            deadline: deadline.toString(),
-            nonce: nonce.toString(),
-            signature,
-            extraData
-          })
-        );
         return;
       }
 
@@ -140,39 +145,24 @@ export async function startPermitServer({
           message: { shopOwner, maxItems, deadline, nonce }
         });
 
-        res.writeHead(200, {
-          "content-type": "application/json",
-          "access-control-allow-origin": "*",
-          "access-control-allow-methods": "GET,POST,OPTIONS",
-          "access-control-allow-headers": "content-type"
+        _json(res, 200, {
+          ok: true,
+          shopOwner,
+          maxItems: maxItems.toString(),
+          deadline: deadline.toString(),
+          nonce: nonce.toString(),
+          signature
         });
-        res.end(
-          JSON.stringify({
-            shopOwner,
-            maxItems: maxItems.toString(),
-            deadline: deadline.toString(),
-            nonce: nonce.toString(),
-            signature
-          })
-        );
         return;
       }
 
-      res.writeHead(404, {
-        "content-type": "application/json",
-        "access-control-allow-origin": "*",
-        "access-control-allow-methods": "GET,POST,OPTIONS",
-        "access-control-allow-headers": "content-type"
-      });
-      res.end(JSON.stringify({ error: "not_found" }));
+      _json(res, 404, { ok: false, error: "not_found" });
     } catch (e) {
-      res.writeHead(400, {
-        "content-type": "application/json",
-        "access-control-allow-origin": "*",
-        "access-control-allow-methods": "GET,POST,OPTIONS",
-        "access-control-allow-headers": "content-type"
-      });
-      res.end(JSON.stringify({ error: e instanceof Error ? e.message : String(e) }));
+      if (e instanceof RateLimitError) {
+        _json(res, 429, { ok: false, error: "rate_limited" });
+        return;
+      }
+      _json(res, 400, { ok: false, error: e instanceof Error ? e.message : String(e) });
     }
   });
 
@@ -187,6 +177,38 @@ function _get(url, key) {
   const value = url.searchParams.get(key);
   if (!value) throw new Error(`Missing query param: ${key}`);
   return value;
+}
+
+function _json(res, status, obj) {
+  res.writeHead(status, {
+    "content-type": "application/json",
+    "access-control-allow-origin": "*",
+    "access-control-allow-methods": "GET,POST,OPTIONS",
+    "access-control-allow-headers": "content-type"
+  });
+  res.end(JSON.stringify(obj));
+}
+
+function _getClientIp(req) {
+  const forwarded = req.headers["x-forwarded-for"];
+  if (typeof forwarded === "string" && forwarded.trim()) return forwarded.split(",")[0].trim();
+  if (Array.isArray(forwarded) && forwarded.length > 0 && forwarded[0].trim()) return forwarded[0].split(",")[0].trim();
+  return req.socket.remoteAddress ?? "unknown";
+}
+
+function _rateLimitOrThrow({ req, url, limiter }) {
+  const ip = _getClientIp(req);
+  const key = `${ip}:${url.pathname}`;
+  const now = Date.now();
+
+  const existing = limiter.buckets.get(key);
+  if (!existing || now - existing.windowStartMs >= limiter.windowMs) {
+    limiter.buckets.set(key, { windowStartMs: now, count: 1 });
+    return;
+  }
+
+  if (existing.count >= limiter.max) throw new RateLimitError();
+  existing.count += 1;
 }
 
 async function _resolveNonce(publicClient, itemsAddress, user, nonceParam) {
