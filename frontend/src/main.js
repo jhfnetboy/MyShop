@@ -53,13 +53,17 @@ let publicClient = createPublicClient({
 
 let walletClient = null;
 let connectedAddress = null;
+let connectedChainId = null;
+let walletEventsBound = false;
 
 function el(tag, attrs = {}, children = []) {
   const node = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
+    if (v === null || v === undefined || v === false) continue;
     if (k === "class") node.className = v;
     else if (k === "text") node.textContent = v;
     else if (k.startsWith("on") && typeof v === "function") node.addEventListener(k.slice(2).toLowerCase(), v);
+    else if (v === true) node.setAttribute(k, "");
     else node.setAttribute(k, v);
   }
   for (const child of children) node.appendChild(child);
@@ -104,9 +108,19 @@ function formatError(e) {
     if (code === "signer_not_configured") return `[${code}] permit signer not configured on server`;
     if (code === "serial_issuer_error") return `[${code}] serial issuer error`;
     if (code === "method_not_allowed") return `[${code}] method not allowed`;
-    return `[${code}] ${msg}`;
+    if (code === "invalid_response") return `[${code}] invalid JSON response from server`;
+    if (code === "http_error" && e.status === 404) return `[${code}] endpoint not found (check URL/path)`;
+    if (code === "http_error" && e.status === 429) return `[${code}] too many requests, retry later`;
+    const meta = [];
+    if (e.status) meta.push(`status=${e.status}`);
+    if (e.url) meta.push(`url=${e.url}`);
+    const suffix = meta.length ? ` (${meta.join(" ")})` : "";
+    return `[${code}]${suffix} ${msg}`;
   }
 
+  if (msg.includes("Missing window.ethereum")) return "[WalletMissing] missing wallet provider (install/enable wallet)";
+  if (msg.startsWith("Invalid address:")) return `[BadConfig] ${msg} (check Config)`;
+  if (msg.toLowerCase().includes("failed to fetch")) return "[NetworkError] network request failed (check RPC/Worker URL)";
   if (msg.includes("SignatureExpired")) return "[SignatureExpired] permit signature expired; refetch extraData";
   if (msg.includes("NonceUsed")) return "[NonceUsed] nonce already used; refetch extraData";
   if (msg.includes("ShopPaused")) return "[ShopPaused] shop is paused";
@@ -118,7 +132,27 @@ function formatError(e) {
 }
 
 function showTxError(e) {
-  setText("txOut", formatError(e));
+  const parts = [formatError(e)];
+  const mismatch = getChainMismatch();
+  if (mismatch) {
+    parts.push(`\n[ChainMismatch] walletChainId=${mismatch.walletChainId} expectedChainId=${mismatch.expectedChainId}`);
+    parts.push("Fix: switch your wallet network to expectedChainId, or update Config -> CHAIN_ID/RPC URL.");
+  }
+  setText("txOut", parts.join("\n"));
+}
+
+function getExpectedChainId() {
+  const node = document.getElementById("chainId");
+  const raw = node ? String(node.value || "").trim() : "";
+  if (raw) return Number(raw);
+  return runtimeCfg.chainId ? Number(runtimeCfg.chainId) : 0;
+}
+
+function getChainMismatch() {
+  const expectedChainId = getExpectedChainId();
+  if (!expectedChainId || connectedChainId == null) return null;
+  if (Number(expectedChainId) === Number(connectedChainId)) return null;
+  return { expectedChainId, walletChainId: connectedChainId };
 }
 
 function requireAddress(value, field) {
@@ -431,7 +465,43 @@ async function connect() {
   });
   const [addr] = await walletClient.requestAddresses();
   connectedAddress = getAddress(addr);
+  connectedChainId = await getConnectedChainId();
   setText("conn", `connected: ${connectedAddress}`);
+
+  if (!walletEventsBound && window.ethereum?.on) {
+    walletEventsBound = true;
+    window.ethereum.on("chainChanged", () => {
+      getConnectedChainId()
+        .then((id) => {
+          connectedChainId = id;
+          render();
+        })
+        .catch(() => {});
+    });
+    window.ethereum.on("accountsChanged", (accounts) => {
+      try {
+        const a = Array.isArray(accounts) ? accounts[0] : null;
+        connectedAddress = a ? getAddress(a) : null;
+        setText("conn", connectedAddress ? `connected: ${connectedAddress}` : "not connected");
+        render();
+      } catch {
+        connectedAddress = null;
+        setText("conn", "not connected");
+        render();
+      }
+    });
+  }
+}
+
+async function getConnectedChainId() {
+  if (!window.ethereum?.request) return null;
+  try {
+    const hex = await window.ethereum.request({ method: "eth_chainId" });
+    if (!hex) return null;
+    return Number.parseInt(String(hex), 16);
+  } catch {
+    return null;
+  }
 }
 
 async function readShop() {
@@ -1375,6 +1445,16 @@ async function renderBuyer(container) {
 
 async function renderShopConsole(container) {
   container.appendChild(el("h2", { text: "店主/运营后台（Shop Owner / Operator）" }));
+  const guardShop = ({ shopIdInputId, anyRolesMask = 0 }) => async (action) => {
+    const shopId = BigInt(val(shopIdInputId));
+    await requireShopAccess({ shopId, anyRolesMask });
+    return action();
+  };
+  const guardItem = ({ itemIdInputId, anyRolesMask = 0 }) => async (action) => {
+    const itemId = BigInt(val(itemIdInputId));
+    await requireItemAccess({ itemId, anyRolesMask });
+    return action();
+  };
 
   container.appendChild(
     el("div", {}, [
@@ -1402,7 +1482,11 @@ async function renderShopConsole(container) {
           el("span", { text: " item+action editor(8)" })
         ])
       ]),
-      el("button", { text: "Set Roles", onclick: () => setShopRolesTx().catch(showTxError) })
+      el("button", {
+        text: "Set Roles",
+        onclick: () =>
+          guardShop({ shopIdInputId: "shopIdRole", anyRolesMask: SHOP_ROLE_SHOP_ADMIN })(() => setShopRolesTx()).catch(showTxError)
+      })
     ])
   );
 
@@ -1425,7 +1509,10 @@ async function renderShopConsole(container) {
       inputRow("shopId", "shopIdUpdateShop", "1"),
       inputRow("treasury", "shopTreasuryUpdateShop"),
       inputRow("metadataHash(bytes32)", "shopMetadataHashUpdateShop", "0x" + "0".repeat(64)),
-      el("button", { text: "Update", onclick: () => updateShopTx().catch(showTxError) })
+      el("button", {
+        text: "Update",
+        onclick: () => guardShop({ shopIdInputId: "shopIdUpdateShop" })(() => updateShopTx()).catch(showTxError)
+      })
     ])
   );
 
@@ -1436,7 +1523,11 @@ async function renderShopConsole(container) {
       el("h3", { text: "Pause Shop (shop admin or protocol governance)" }),
       inputRow("shopId", "shopIdPause", "1"),
       inputRow("paused(true|false)", "shopPaused", "true"),
-      el("button", { text: "Set", onclick: () => setShopPausedTx().catch(showTxError) })
+      el("button", {
+        text: "Set",
+        onclick: () =>
+          guardShop({ shopIdInputId: "shopIdPause", anyRolesMask: SHOP_ROLE_SHOP_ADMIN })(() => setShopPausedTx()).catch(showTxError)
+      })
     ])
   );
 
@@ -1447,7 +1538,13 @@ async function renderShopConsole(container) {
       el("h3", { text: "Item Active (maintainer)" }),
       inputRow("itemId", "itemIdActive", "1"),
       inputRow("active(true|false)", "itemActive", "true"),
-      el("button", { text: "Set Active", onclick: () => setItemActiveTx().catch(showTxError) })
+      el("button", {
+        text: "Set Active",
+        onclick: () =>
+          guardItem({ itemIdInputId: "itemIdActive", anyRolesMask: SHOP_ROLE_SHOP_ADMIN | SHOP_ROLE_ITEM_MAINTAINER })(
+            () => setItemActiveTx()
+          ).catch(showTxError)
+      })
     ])
   );
 
@@ -1463,7 +1560,13 @@ async function renderShopConsole(container) {
       inputRow("soulbound(true|false)", "soulboundUpdate", "true"),
       inputRow("tokenURI", "tokenURIUpdate", "ipfs://token"),
       inputRow("requiresSerial(true|false)", "requiresSerialUpdate", "true"),
-      el("button", { text: "Update Item", onclick: () => updateItemTx().catch(showTxError) })
+      el("button", {
+        text: "Update Item",
+        onclick: () =>
+          guardItem({ itemIdInputId: "itemIdUpdate", anyRolesMask: SHOP_ROLE_SHOP_ADMIN | SHOP_ROLE_ITEM_EDITOR | SHOP_ROLE_ITEM_ACTION_EDITOR })(
+            () => updateItemTx()
+          ).catch(showTxError)
+      })
     ])
   );
 
@@ -1477,7 +1580,10 @@ async function renderShopConsole(container) {
       inputRow("actionData(hex)", "actionDataUpdate", "0x"),
       el("button", {
         text: "Update Action",
-        onclick: () => updateItemActionTx().catch(showTxError)
+        onclick: () =>
+          guardItem({ itemIdInputId: "itemIdUpdateAction", anyRolesMask: SHOP_ROLE_SHOP_ADMIN | SHOP_ROLE_ITEM_ACTION_EDITOR })(() =>
+            updateItemActionTx()
+          ).catch(showTxError)
       })
     ])
   );
@@ -1492,14 +1598,21 @@ async function renderShopConsole(container) {
       inputRow("contentHash(bytes32 optional)", "pageHash", "0x" + "0".repeat(64)),
       el("button", {
         text: "Add Page Version",
-        onclick: () => addItemPageTx().catch(showTxError)
+        onclick: () =>
+          guardItem({ itemIdInputId: "itemIdPage", anyRolesMask: SHOP_ROLE_SHOP_ADMIN | SHOP_ROLE_ITEM_EDITOR | SHOP_ROLE_ITEM_ACTION_EDITOR })(() =>
+            addItemPageTx()
+          ).catch(showTxError)
       }),
       el("h4", { text: "Default Page" }),
       inputRow("itemId", "itemIdDefaultPage", "1"),
       inputRow("version", "defaultPageVersion", "1"),
       el("button", {
         text: "Set Default",
-        onclick: () => setDefaultItemPageTx().catch(showTxError)
+        onclick: () =>
+          guardItem({
+            itemIdInputId: "itemIdDefaultPage",
+            anyRolesMask: SHOP_ROLE_SHOP_ADMIN | SHOP_ROLE_ITEM_EDITOR | SHOP_ROLE_ITEM_ACTION_EDITOR
+          })(() => setDefaultItemPageTx()).catch(showTxError)
       })
     ])
   );
@@ -1525,7 +1638,15 @@ async function renderShopConsole(container) {
       inputRow("nonce(auto fill)", "riskNonce", ""),
       inputRow("signature(auto fill)", "riskSig", "0x"),
       el("button", { text: "Fetch Risk Sig", onclick: () => fetchRiskSig().catch(showTxError) }),
-      el("button", { text: "Add", onclick: () => addItem().catch(showTxError) })
+      el("button", {
+        text: "Add",
+        onclick: () =>
+          guardShop({
+            shopIdInputId: "shopIdAdd",
+            anyRolesMask:
+              SHOP_ROLE_SHOP_ADMIN | SHOP_ROLE_ITEM_MAINTAINER | SHOP_ROLE_ITEM_EDITOR | SHOP_ROLE_ITEM_ACTION_EDITOR
+          })(() => addItem()).catch(showTxError)
+      })
     ])
   );
 
@@ -1541,13 +1662,22 @@ async function renderShopConsole(container) {
       }),
       el("h4", { text: "Import (paste json)" }),
       el("textarea", { id: "importJson", rows: "8", style: "width: 100%;", placeholder: "{...}" }),
-      el("button", { text: "Import Items", onclick: () => importShopItemsTx().catch(showTxError) })
+      el("button", {
+        text: "Import Items",
+        onclick: () =>
+          guardShop({
+            shopIdInputId: "shopIdExport",
+            anyRolesMask:
+              SHOP_ROLE_SHOP_ADMIN | SHOP_ROLE_ITEM_MAINTAINER | SHOP_ROLE_ITEM_EDITOR | SHOP_ROLE_ITEM_ACTION_EDITOR
+          })(() => importShopItemsTx()).catch(showTxError)
+      })
     ])
   );
 }
 
-async function renderProtocolConsole(container) {
+async function renderProtocolConsole(container, { canWrite }) {
   container.appendChild(el("h2", { text: "协议后台（Protocol）" }));
+  if (!canWrite) container.appendChild(el("div", { text: "提示：当前钱包不是协议 owner，仍可 Read，但写操作会被禁用。" }));
 
   container.appendChild(
     el("div", {}, [
@@ -1555,16 +1685,20 @@ async function renderProtocolConsole(container) {
       el("button", { text: "Read", onclick: () => readProtocolConfig().catch(showTxError) }),
       el("pre", { id: "platformOut" }),
       inputRow("registry", "platformRegistry"),
-      el("button", { text: "Set Registry", onclick: () => setRegistryTx().catch(showTxError) }),
+      el("button", { text: "Set Registry", disabled: !canWrite, onclick: () => setRegistryTx().catch(showTxError) }),
       inputRow("platformTreasury", "platformTreasury"),
-      el("button", { text: "Set Protocol Treasury", onclick: () => setProtocolTreasuryTx().catch(showTxError) }),
+      el("button", { text: "Set Protocol Treasury", disabled: !canWrite, onclick: () => setProtocolTreasuryTx().catch(showTxError) }),
       inputRow("listingFeeToken", "platformListingFeeToken"),
       inputRow("listingFeeAmount(uint256)", "platformListingFeeAmount", "0"),
-      el("button", { text: "Set Listing Fee", onclick: () => setListingFeeTx().catch(showTxError) }),
+      el("button", { text: "Set Listing Fee", disabled: !canWrite, onclick: () => setListingFeeTx().catch(showTxError) }),
       inputRow("protocolFeeBps(uint16)", "platformFeeBps", "100"),
-      el("button", { text: "Set Protocol Fee", onclick: () => setProtocolFeeTx().catch(showTxError) }),
+      el("button", { text: "Set Protocol Fee", disabled: !canWrite, onclick: () => setProtocolFeeTx().catch(showTxError) }),
       inputRow("newOwner", "shopsNewOwner"),
-      el("button", { text: "Transfer MyShops Ownership", onclick: () => transferShopsOwnershipTx().catch(showTxError) })
+      el("button", {
+        text: "Transfer MyShops Ownership",
+        disabled: !canWrite,
+        onclick: () => transferShopsOwnershipTx().catch(showTxError)
+      })
     ])
   );
 
@@ -1576,16 +1710,119 @@ async function renderProtocolConsole(container) {
       el("button", { text: "Read", onclick: () => readItemsConfig().catch(showTxError) }),
       el("pre", { id: "itemsOut" }),
       inputRow("riskSigner", "itemsRiskSigner"),
-      el("button", { text: "Set Risk Signer", onclick: () => setRiskSignerTx().catch(showTxError) }),
+      el("button", { text: "Set Risk Signer", disabled: !canWrite, onclick: () => setRiskSignerTx().catch(showTxError) }),
       inputRow("serialSigner", "itemsSerialSigner"),
-      el("button", { text: "Set Serial Signer", onclick: () => setSerialSignerTx().catch(showTxError) }),
+      el("button", { text: "Set Serial Signer", disabled: !canWrite, onclick: () => setSerialSignerTx().catch(showTxError) }),
       inputRow("action", "itemsActionAddress"),
       inputRow("allowed(true|false)", "itemsActionAllowed", "true"),
-      el("button", { text: "Set Action Allowed", onclick: () => setActionAllowedTx().catch(showTxError) }),
+      el("button", { text: "Set Action Allowed", disabled: !canWrite, onclick: () => setActionAllowedTx().catch(showTxError) }),
       inputRow("newOwner", "itemsNewOwner"),
-      el("button", { text: "Transfer MyShopItems Ownership", onclick: () => transferItemsOwnershipTx().catch(showTxError) })
+      el("button", {
+        text: "Transfer MyShopItems Ownership",
+        disabled: !canWrite,
+        onclick: () => transferItemsOwnershipTx().catch(showTxError)
+      })
     ])
   );
+}
+
+function getCurrentCfgValue(id) {
+  const node = document.getElementById(id);
+  const v = node ? String(node.value || "").trim() : "";
+  if (v) return v;
+  return runtimeCfg[id] ? String(runtimeCfg[id]) : "";
+}
+
+async function getProtocolOwners() {
+  const shopsAddressVal = getCurrentCfgValue("shopsAddress");
+  const itemsAddressVal = getCurrentCfgValue("itemsAddress");
+
+  const owners = { shopsOwner: null, itemsOwner: null };
+
+  if (isAddress(shopsAddressVal)) {
+    const o = await publicClient.readContract({
+      address: getAddress(shopsAddressVal),
+      abi: myShopsAbi,
+      functionName: "owner",
+      args: []
+    });
+    owners.shopsOwner = getAddress(o);
+  }
+
+  if (isAddress(itemsAddressVal)) {
+    const o = await publicClient.readContract({
+      address: getAddress(itemsAddressVal),
+      abi: myShopItemsAbi,
+      functionName: "owner",
+      args: []
+    });
+    owners.itemsOwner = getAddress(o);
+  }
+
+  return owners;
+}
+
+const SHOP_ROLE_SHOP_ADMIN = 1;
+const SHOP_ROLE_ITEM_MAINTAINER = 2;
+const SHOP_ROLE_ITEM_EDITOR = 4;
+const SHOP_ROLE_ITEM_ACTION_EDITOR = 8;
+
+async function getShopAccess({ shopId, actor }) {
+  const shopsAddressVal = requireAddress(getCurrentCfgValue("shopsAddress"), "shopsAddress");
+  const owners = await getProtocolOwners();
+
+  const shop = await publicClient.readContract({
+    address: shopsAddressVal,
+    abi: myShopsAbi,
+    functionName: "shops",
+    args: [shopId]
+  });
+
+  const shopOwner = getAddress(pick(shop, "owner", 0));
+  const roles = await publicClient.readContract({
+    address: shopsAddressVal,
+    abi: myShopsAbi,
+    functionName: "shopRoles",
+    args: [shopId, actor]
+  });
+
+  const rolesMask = Number(BigInt(roles));
+  const isProtocolOwner = (owners.shopsOwner && owners.shopsOwner === actor) || (owners.itemsOwner && owners.itemsOwner === actor);
+  const isShopOwner = shopOwner === actor;
+
+  return { isProtocolOwner, isShopOwner, rolesMask, shopOwner };
+}
+
+async function requireShopAccess({ shopId, anyRolesMask = 0, allowProtocolOwner = true, allowShopOwner = true }) {
+  if (!connectedAddress) throw new Error("请先连接钱包");
+  const actor = getAddress(connectedAddress);
+  const access = await getShopAccess({ shopId, actor });
+  if (allowProtocolOwner && access.isProtocolOwner) return;
+  if (allowShopOwner && access.isShopOwner) return;
+  if (anyRolesMask && (access.rolesMask & anyRolesMask) !== 0) return;
+  throw new Error("无权限：该操作需要对应角色（shopRoles）或 shop owner / protocol owner");
+}
+
+async function getItemShopId(itemId) {
+  const itemsAddressVal = requireAddress(getCurrentCfgValue("itemsAddress"), "itemsAddress");
+  const item = await publicClient.readContract({
+    address: itemsAddressVal,
+    abi: myShopItemsAbi,
+    functionName: "items",
+    args: [itemId]
+  });
+  return BigInt(pick(item, "shopId", 0));
+}
+
+async function requireItemAccess({ itemId, anyRolesMask = 0, allowProtocolOwner = true, allowShopOwner = true }) {
+  const shopId = await getItemShopId(itemId);
+  return requireShopAccess({ shopId, anyRolesMask, allowProtocolOwner, allowShopOwner });
+}
+
+function renderWalletRequired(container, { title, required }) {
+  container.appendChild(el("h2", { text: title }));
+  container.appendChild(el("div", { text: `需要连接钱包：${required}` }));
+  container.appendChild(el("div", { text: "请先点击顶部 Connect Wallet，然后重试。" }));
 }
 
 async function renderConfig(container) {
@@ -1638,10 +1875,17 @@ function render() {
   const app = document.getElementById("app");
   app.innerHTML = "";
 
+  const mismatch = getChainMismatch();
   const header = el("div", {}, [
     el("h1", { text: "MyShop Plaza" }),
     el("button", { text: "Connect Wallet", onclick: () => connect().catch(showTxError) }),
     el("div", { id: "conn", text: connectedAddress ? `connected: ${connectedAddress}` : "not connected" }),
+    mismatch
+      ? el("div", {
+          style: "color: #b45309;",
+          text: `Chain mismatch: walletChainId=${mismatch.walletChainId} expectedChainId=${mismatch.expectedChainId}`
+        })
+      : null,
     el("div", {}, [
       navLink("广场", "#/plaza"),
       navLink("买家", "#/buyer"),
@@ -1680,11 +1924,28 @@ function render() {
         return;
       }
       if (route.parts[0] === "shop-console") {
+        if (!connectedAddress) {
+          renderWalletRequired(main, { title: "店主/运营后台（Shop Owner / Operator）", required: "shop owner / operator" });
+          return;
+        }
         await renderShopConsole(main);
         return;
       }
       if (route.parts[0] === "protocol-console") {
-        await renderProtocolConsole(main);
+        if (!connectedAddress) {
+          renderWalletRequired(main, { title: "协议后台（Protocol）", required: "protocol owner" });
+          return;
+        }
+        let canWrite = false;
+        try {
+          const owners = await getProtocolOwners();
+          const addr = getAddress(connectedAddress);
+          canWrite =
+            (owners.shopsOwner && owners.shopsOwner === addr) || (owners.itemsOwner && owners.itemsOwner === addr);
+        } catch {
+          canWrite = false;
+        }
+        await renderProtocolConsole(main, { canWrite });
         return;
       }
       if (route.parts[0] === "config") {
