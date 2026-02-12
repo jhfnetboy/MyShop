@@ -58,7 +58,7 @@ export async function startApiServer({ rpcUrl, chain, itemsAddress, port }) {
     stop: false,
     replayedOnStart: false,
     persist: {
-      enabled: process.env.INDEXER_PERSIST === "1" || process.env.INDEXER_PERSIST_PATH != null,
+      enabled: process.env.INDEXER_PERSIST === "0" ? false : true,
       path: process.env.INDEXER_PERSIST_PATH ?? null,
       lastSavedAtMs: null,
       saveInFlight: false,

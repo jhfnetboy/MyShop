@@ -12,3 +12,4 @@ demo/demo.json
 demo/worker.log
 contracts/broadcast/
 contracts/cache/
+worker/data/
