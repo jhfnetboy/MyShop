@@ -96,6 +96,62 @@ function setText(id, text) {
   document.getElementById(id).textContent = text;
 }
 
+const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
+
+function isZeroAddress(addr) {
+  if (!addr) return false;
+  try {
+    return getAddress(addr) === ZERO_ADDRESS;
+  } catch {
+    return String(addr).toLowerCase() === ZERO_ADDRESS;
+  }
+}
+
+function shortHex(value, { head = 6, tail = 4 } = {}) {
+  const s = String(value || "");
+  if (!s.startsWith("0x")) return s;
+  if (s.length <= 2 + head + tail) return s;
+  return `${s.slice(0, 2 + head)}…${s.slice(-tail)}`;
+}
+
+function formatPayToken(payToken) {
+  if (!payToken || isZeroAddress(payToken)) return "ETH";
+  return shortHex(payToken);
+}
+
+function explorerBaseUrl(chainId) {
+  const id = Number(chainId);
+  if (id === 1) return "https://etherscan.io";
+  if (id === 11155111) return "https://sepolia.etherscan.io";
+  if (id === 137) return "https://polygonscan.com";
+  if (id === 80001) return "https://mumbai.polygonscan.com";
+  if (id === 10) return "https://optimistic.etherscan.io";
+  if (id === 42161) return "https://arbiscan.io";
+  if (id === 8453) return "https://basescan.org";
+  return null;
+}
+
+function txLinkNode(txHash) {
+  const base = explorerBaseUrl(chain?.id);
+  if (!base || !txHash) return el("span", { text: String(txHash || "") });
+  return el("a", { href: `${base}/tx/${txHash}`, target: "_blank", rel: "noreferrer", text: shortHex(txHash) });
+}
+
+function addressNode(addr) {
+  if (!addr) return el("span", { text: "" });
+  const base = explorerBaseUrl(chain?.id);
+  if (!base || !String(addr).startsWith("0x")) return el("span", { text: String(addr) });
+  return el("a", { href: `${base}/address/${addr}`, target: "_blank", rel: "noreferrer", text: shortHex(addr) });
+}
+
+function kv(label, valueNodeOrText) {
+  const valueNode =
+    valueNodeOrText && typeof valueNodeOrText === "object" && valueNodeOrText.nodeType
+      ? valueNodeOrText
+      : el("span", { text: String(valueNodeOrText ?? "") });
+  return el("div", {}, [el("span", { text: `${label}: ` }), valueNode]);
+}
+
 class ApiError extends Error {
   constructor(message, { status, errorCode, errorDetails, url } = {}) {
     super(message);
@@ -402,8 +458,17 @@ const purchasedEvent = parseAbiItem(
   "event Purchased(uint256 indexed itemId,uint256 indexed shopId,address indexed buyer,address recipient,uint256 quantity,address payToken,uint256 payAmount,uint256 platformFeeAmount,bytes32 serialHash,uint256 firstTokenId)"
 );
 
-async function fetchPurchases({ buyer, shopId, itemId, limit } = {}) {
-  const params = { buyer, shopId, itemId, limit: limit != null ? String(limit) : undefined, include: "enrich" };
+async function fetchPurchases({ buyer, shopId, itemId, limit, source, fromBlock, toBlock } = {}) {
+  const params = {
+    buyer,
+    shopId,
+    itemId,
+    limit: limit != null ? String(limit) : undefined,
+    source,
+    fromBlock,
+    toBlock,
+    include: "enrich"
+  };
   try {
     const json = await workerApiGet("/purchases", params);
     if (Array.isArray(json?.purchases)) return json;
@@ -412,7 +477,8 @@ async function fetchPurchases({ buyer, shopId, itemId, limit } = {}) {
     const itemsAddressVal = val("itemsAddress") || runtimeCfg.itemsAddress;
     const itemsAddress = requireAddress(itemsAddressVal, "itemsAddress");
     const latest = await publicClient.getBlockNumber();
-    const fromBlock = latest > 5000n ? latest - 5000n : 0n;
+    const to = toBlock ? BigInt(toBlock) : latest;
+    const from = fromBlock ? BigInt(fromBlock) : latest > 5000n ? latest - 5000n : 0n;
 
     const args = {};
     if (buyer) args.buyer = requireAddress(buyer, "buyer");
@@ -423,8 +489,8 @@ async function fetchPurchases({ buyer, shopId, itemId, limit } = {}) {
       address: itemsAddress,
       event: purchasedEvent,
       args: Object.keys(args).length ? args : undefined,
-      fromBlock,
-      toBlock: latest
+      fromBlock: from,
+      toBlock: to
     });
 
     const max = Math.min(logs.length, limit != null ? Math.max(1, Number(limit)) : 200);
@@ -462,8 +528,8 @@ async function fetchPurchases({ buyer, shopId, itemId, limit } = {}) {
     return {
       ok: true,
       source: "chain",
-      fromBlock: fromBlock.toString(),
-      toBlock: latest.toString(),
+      fromBlock: from.toString(),
+      toBlock: to.toString(),
       latest: latest.toString(),
       indexedToBlock: null,
       count: purchases.length,
@@ -1314,7 +1380,11 @@ async function renderPlaza(container) {
       shopsEl.appendChild(
         el("div", {}, [
           el("a", { href: `#/shop/${s.shopId}`, text: `Shop #${s.shopId}` }),
-          el("span", { text: ` owner=${shop.owner} paused=${shop.paused}` })
+          el("span", { text: " owner=" }),
+          addressNode(shop.owner),
+          el("span", { text: " treasury=" }),
+          addressNode(shop.treasury),
+          el("span", { text: ` paused=${shop.paused}` })
         ])
       );
     }
@@ -1324,13 +1394,14 @@ async function renderPlaza(container) {
     for (const it of items) {
       const item = it.item;
       const shop = shopsById.get(String(item.shopId));
+      const actionLabel = item.action && !isZeroAddress(item.action) ? shortHex(item.action) : "none";
       itemsEl.appendChild(
         el("div", {}, [
           el("a", { href: `#/item/${it.itemId}`, text: `Item #${it.itemId}` }),
           el("span", {
-            text: ` shopId=${item.shopId} active=${item.active} requiresSerial=${item.requiresSerial} unitPrice=${item.unitPrice}`
+            text: ` shopId=${item.shopId} active=${item.active} payToken=${formatPayToken(item.payToken)} unitPrice=${item.unitPrice} requiresSerial=${item.requiresSerial} soulbound=${item.soulbound} action=${actionLabel}`
           }),
-          shop ? el("span", { text: ` shopOwner=${shop.owner}` }) : el("span", { text: "" }),
+          shop ? el("span", {}, [el("span", { text: " shopOwner=" }), addressNode(shop.owner)]) : el("span", { text: "" }),
           el("button", {
             text: "Buy",
             style: "margin-left: 8px;",
@@ -1354,13 +1425,16 @@ async function renderPlaza(container) {
 
 async function renderShopDetail(container, shopId) {
   container.appendChild(el("h2", { text: `Shop #${shopId}` }));
-  const out = el("pre", { id: "shopDetailOut", text: "loading..." });
+  const out = el("div", { id: "shopDetailOut" });
   const itemsBox = el("div", { id: "shopItemsBox" });
   container.appendChild(out);
   container.appendChild(itemsBox);
 
   const shop = await fetchShop(shopId);
-  out.textContent = JSON.stringify(shop, null, 2);
+  out.appendChild(kv("owner", addressNode(shop.owner)));
+  out.appendChild(kv("treasury", addressNode(shop.treasury)));
+  out.appendChild(kv("metadataHash", shortHex(shop.metadataHash)));
+  out.appendChild(kv("paused", String(shop.paused)));
 
   itemsBox.appendChild(el("h3", { text: "Items (scan first N items)" }));
   itemsBox.appendChild(inputRow("scan limit", "shopItemScanLimit", "200"));
@@ -1378,11 +1452,20 @@ async function renderShopDetail(container, shopId) {
     const scanLimit = Number(val("shopItemScanLimit") || "200");
     const { items } = await fetchItemList({ cursor: 1n, limit: scanLimit });
     const filtered = items.filter((x) => String(x.item.shopId) === String(shopId));
+    if (filtered.length === 0) {
+      list.appendChild(el("div", { text: "No items found for this shop in scanned range." }));
+      setText("txOut", "shop items: 0");
+      return;
+    }
     for (const it of filtered) {
+      const item = it.item;
+      const actionLabel = item.action && !isZeroAddress(item.action) ? shortHex(item.action) : "none";
       list.appendChild(
         el("div", {}, [
           el("a", { href: `#/item/${it.itemId}`, text: `Item #${it.itemId}` }),
-          el("span", { text: ` active=${it.item.active} unitPrice=${it.item.unitPrice}` })
+          el("span", {
+            text: ` active=${item.active} payToken=${formatPayToken(item.payToken)} unitPrice=${item.unitPrice} requiresSerial=${item.requiresSerial} soulbound=${item.soulbound} action=${actionLabel}`
+          })
         ])
       );
     }
@@ -1392,15 +1475,87 @@ async function renderShopDetail(container, shopId) {
   await scan();
 }
 
+function parseBytesLen(hex) {
+  const s = String(hex || "");
+  if (!s.startsWith("0x")) return null;
+  return Math.max(0, Math.floor((s.length - 2) / 2));
+}
+
+function renderPurchasesList(container, { purchases, emptyText }) {
+  container.innerHTML = "";
+  if (!Array.isArray(purchases) || purchases.length === 0) {
+    container.appendChild(el("div", { text: emptyText || "No purchases." }));
+    return;
+  }
+  for (const p of purchases) {
+    const serialHash = p.serialHash && String(p.serialHash) !== "0x0000000000000000000000000000000000000000000000000000000000000000" ? shortHex(p.serialHash) : "-";
+    container.appendChild(
+      el("div", {}, [
+        el("span", { text: `block=${p.blockNumber ?? ""} ` }),
+        txLinkNode(p.txHash),
+        el("span", { text: " item=" }),
+        el("a", { href: `#/item/${p.itemId}`, text: `#${p.itemId}` }),
+        el("span", { text: " shop=" }),
+        el("a", { href: `#/shop/${p.shopId}`, text: `#${p.shopId}` }),
+        el("span", {
+          text: ` qty=${p.quantity} payToken=${formatPayToken(p.payToken)} payAmount=${p.payAmount} fee=${p.platformFeeAmount} firstTokenId=${p.firstTokenId} serialHash=${serialHash} buyer=`
+        }),
+        addressNode(p.buyer),
+        el("span", { text: " recipient=" }),
+        addressNode(p.recipient)
+      ])
+    );
+  }
+}
+
 async function renderItemDetail(container, itemId) {
   container.appendChild(el("h2", { text: `Item #${itemId}` }));
-  const out = el("pre", { id: "itemDetailOut", text: "loading..." });
+  const out = el("div", { id: "itemDetailOut" });
   const metaBox = el("div", { id: "itemDetailMeta" });
   container.appendChild(out);
   container.appendChild(metaBox);
 
   const item = await fetchItem(itemId);
-  out.textContent = JSON.stringify(item, null, 2);
+  out.appendChild(kv("shopId", el("a", { href: `#/shop/${item.shopId}`, text: `Shop #${item.shopId}` })));
+  out.appendChild(kv("active", String(item.active)));
+  out.appendChild(kv("payToken", formatPayToken(item.payToken)));
+  out.appendChild(kv("unitPrice", String(item.unitPrice)));
+  out.appendChild(kv("requiresSerial", String(item.requiresSerial)));
+  out.appendChild(kv("soulbound", String(item.soulbound)));
+  out.appendChild(kv("nftContract", addressNode(item.nftContract)));
+  out.appendChild(kv("action", item.action && !isZeroAddress(item.action) ? addressNode(item.action) : "none"));
+  out.appendChild(kv("actionDataBytes", String(parseBytesLen(item.actionData) ?? "")));
+  const tokenUriHttp = toHttpUri(item.tokenURI);
+  out.appendChild(kv("tokenURI", tokenUriHttp ? el("a", { href: tokenUriHttp, target: "_blank", rel: "noreferrer", text: tokenUriHttp }) : item.tokenURI));
+
+  try {
+    const itemsAddressVal = val("itemsAddress") || runtimeCfg.itemsAddress;
+    const itemsAddress = requireAddress(itemsAddressVal, "itemsAddress");
+    const defaultVersion = await publicClient.readContract({
+      address: itemsAddress,
+      abi: myShopItemsAbi,
+      functionName: "itemDefaultPageVersion",
+      args: [BigInt(itemId)]
+    });
+    const v = BigInt(defaultVersion);
+    if (v > 0n) {
+      const raw = await publicClient.readContract({
+        address: itemsAddress,
+        abi: myShopItemsAbi,
+        functionName: "getItemPage",
+        args: [BigInt(itemId), v]
+      });
+      const uri = pick(raw, "uri", 1);
+      const contentHash = pick(raw, "contentHash", 0);
+      out.appendChild(kv("defaultPageVersion", v.toString()));
+      out.appendChild(kv("pageContentHash", shortHex(contentHash)));
+      out.appendChild(kv("pageUri", uri ? el("a", { href: uri, target: "_blank", rel: "noreferrer", text: uri }) : ""));
+    } else {
+      out.appendChild(kv("defaultPageVersion", "0"));
+    }
+  } catch {
+    out.appendChild(kv("defaultPageVersion", "unknown"));
+  }
 
   const meta = await fetchMetadataFromTokenUri(item.tokenURI);
   if (meta) {
@@ -1414,18 +1569,32 @@ async function renderItemDetail(container, itemId) {
 
   container.appendChild(el("hr"));
   container.appendChild(el("h3", { text: "Recent Purchases" }));
-  const purchasesOut = el("pre", { id: "purchasesOut", text: "loading..." });
+  const purchasesOut = el("div", { id: "purchasesOut" });
   container.appendChild(
     el("button", {
       text: "Reload Purchases",
       onclick: () => loadPurchases().catch(showTxError)
     })
   );
+  container.appendChild(
+    el("button", {
+      text: "View All Purchases",
+      style: "margin-left: 8px;",
+      onclick: () => {
+        window.location.hash = `#/purchases?itemId=${encodeURIComponent(String(itemId))}`;
+      }
+    })
+  );
   container.appendChild(purchasesOut);
 
   async function loadPurchases() {
     const res = await fetchPurchases({ itemId: String(itemId), limit: 20 });
-    purchasesOut.textContent = JSON.stringify(res, null, 2);
+    const header = el("div", { text: `source=${res.source || ""} count=${res.count || 0} fromBlock=${res.fromBlock || ""} toBlock=${res.toBlock || ""} indexedToBlock=${res.indexedToBlock || ""}` });
+    purchasesOut.innerHTML = "";
+    purchasesOut.appendChild(header);
+    const list = el("div", {});
+    purchasesOut.appendChild(list);
+    renderPurchasesList(list, { purchases: res.purchases, emptyText: "No purchases for this item." });
   }
 
   await loadPurchases();
@@ -1439,6 +1608,58 @@ async function renderItemDetail(container, itemId) {
       }
     })
   );
+}
+
+async function renderPurchasesPage(container, query = {}) {
+  container.appendChild(el("h2", { text: "购买记录（Purchases）" }));
+  container.appendChild(el("div", { text: "数据源：默认走 Worker Index；也可切换为 chain 扫描（更慢但更接近链上真实）。" }));
+
+  const sourceSelect = el("select", { id: "purchasesSource" }, [
+    el("option", { value: "index", text: "index" }),
+    el("option", { value: "chain", text: "chain" })
+  ]);
+
+  container.appendChild(
+    el("div", {}, [
+      inputRow("buyer(optional)", "purchasesBuyer", query.buyer || connectedAddress || ""),
+      inputRow("shopId(optional)", "purchasesShopId", query.shopId || ""),
+      inputRow("itemId(optional)", "purchasesItemId", query.itemId || ""),
+      inputRow("limit", "purchasesLimit", query.limit || "50"),
+      inputRow("fromBlock(optional)", "purchasesFromBlock", query.fromBlock || ""),
+      inputRow("toBlock(optional)", "purchasesToBlock", query.toBlock || ""),
+      el("div", {}, [el("label", { for: "purchasesSource", text: "source" }), sourceSelect]),
+      el("button", { text: "Load", onclick: () => load().catch(showTxError) })
+    ])
+  );
+  document.getElementById("purchasesSource").value = query.source || "index";
+
+  const meta = el("div", { id: "purchasesMeta" });
+  const list = el("div", { id: "purchasesList" });
+  container.appendChild(meta);
+  container.appendChild(list);
+
+  async function load() {
+    setText("txOut", "loading purchases...");
+    const buyer = val("purchasesBuyer") || undefined;
+    const shopId = val("purchasesShopId") || undefined;
+    const itemId = val("purchasesItemId") || undefined;
+    const limit = Number(val("purchasesLimit") || "50");
+    const fromBlock = val("purchasesFromBlock") || undefined;
+    const toBlock = val("purchasesToBlock") || undefined;
+    const source = val("purchasesSource") || "index";
+
+    const res = await fetchPurchases({ buyer, shopId, itemId, limit, source, fromBlock, toBlock });
+    meta.innerHTML = "";
+    meta.appendChild(
+      el("div", {
+        text: `source=${res.source || ""} count=${res.count || 0} fromBlock=${res.fromBlock || ""} toBlock=${res.toBlock || ""} indexedToBlock=${res.indexedToBlock || ""}`
+      })
+    );
+    renderPurchasesList(list, { purchases: res.purchases, emptyText: "No purchases matched filters." });
+    setText("txOut", "purchases loaded");
+  }
+
+  await load();
 }
 
 async function renderBuyer(container) {
@@ -1926,6 +2147,7 @@ function render() {
     el("div", {}, [
       navLink("广场", "#/plaza"),
       navLink("买家", "#/buyer"),
+      navLink("购买记录", "#/purchases"),
       navLink("店主后台", "#/shop-console"),
       navLink("协议后台", "#/protocol-console"),
       navLink("配置", "#/config")
@@ -1953,6 +2175,10 @@ function render() {
       }
       if (route.parts[0] === "item" && route.parts[1]) {
         await renderItemDetail(main, route.parts[1]);
+        return;
+      }
+      if (route.parts[0] === "purchases") {
+        await renderPurchasesPage(main, route.query);
         return;
       }
       if (route.parts[0] === "buyer") {
