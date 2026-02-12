@@ -4,10 +4,17 @@
   "type": "module",
   "scripts": {
     "dev": "node src/index.js",
-    "check": "node --check src/index.js && node --check src/watchPurchased.js && node --check src/permitServer.js && node --check src/apiServer.js"
+    "check": "node --check src/index.js && node --check src/watchPurchased.js && node --check src/permitServer.js && node --check src/apiServer.js",
+    "smoke:all": "tsx src/smoke/allFeatures.ts",
+    "test": "pnpm smoke:all"
   },
   "dependencies": {
     "dotenv": "^16.4.5",
     "viem": "^2.23.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.3"
   }
 }
