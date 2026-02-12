@@ -34,10 +34,80 @@ export const myShopsAbi = [
     stateMutability: "view",
     inputs: [],
     outputs: [{ name: "", type: "uint256" }]
+  },
+  {
+    type: "function",
+    name: "updateShop",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "shopId", type: "uint256" },
+      { name: "treasury", type: "address" },
+      { name: "metadataHash", type: "bytes32" }
+    ],
+    outputs: []
+  },
+  {
+    type: "function",
+    name: "setShopPaused",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "shopId", type: "uint256" },
+      { name: "paused", type: "bool" }
+    ],
+    outputs: []
+  },
+  {
+    type: "function",
+    name: "setShopRoles",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "shopId", type: "uint256" },
+      { name: "operator", type: "address" },
+      { name: "roles", type: "uint8" }
+    ],
+    outputs: []
+  },
+  {
+    type: "function",
+    name: "shopRoles",
+    stateMutability: "view",
+    inputs: [
+      { name: "", type: "uint256" },
+      { name: "", type: "address" }
+    ],
+    outputs: [{ name: "", type: "uint8" }]
+  },
+  {
+    type: "function",
+    name: "ROLE_ITEM_MAINTAINER",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "uint8" }]
+  },
+  {
+    type: "function",
+    name: "ROLE_ITEM_EDITOR",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "uint8" }]
+  },
+  {
+    type: "function",
+    name: "ROLE_ITEM_ACTION_EDITOR",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "uint8" }]
   }
 ];
 
 export const myShopItemsAbi = [
+  {
+    type: "function",
+    name: "itemCount",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "uint256" }]
+  },
   {
     type: "function",
     name: "addItem",
@@ -94,6 +164,96 @@ export const myShopItemsAbi = [
       { name: "requiresSerial", type: "bool" },
       { name: "active", type: "bool" }
     ]
+  },
+  {
+    type: "function",
+    name: "setItemActive",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "itemId", type: "uint256" },
+      { name: "active", type: "bool" }
+    ],
+    outputs: []
+  },
+  {
+    type: "function",
+    name: "updateItem",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "itemId", type: "uint256" },
+      {
+        name: "p",
+        type: "tuple",
+        components: [
+          { name: "payToken", type: "address" },
+          { name: "unitPrice", type: "uint256" },
+          { name: "nftContract", type: "address" },
+          { name: "soulbound", type: "bool" },
+          { name: "tokenURI", type: "string" },
+          { name: "requiresSerial", type: "bool" }
+        ]
+      }
+    ],
+    outputs: []
+  },
+  {
+    type: "function",
+    name: "updateItemAction",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "itemId", type: "uint256" },
+      { name: "action", type: "address" },
+      { name: "actionData", type: "bytes" }
+    ],
+    outputs: []
+  },
+  {
+    type: "function",
+    name: "addItemPageVersion",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "itemId", type: "uint256" },
+      { name: "uri", type: "string" },
+      { name: "contentHash", type: "bytes32" }
+    ],
+    outputs: [{ name: "version", type: "uint256" }]
+  },
+  {
+    type: "function",
+    name: "setItemDefaultPageVersion",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "itemId", type: "uint256" },
+      { name: "version", type: "uint256" }
+    ],
+    outputs: []
+  },
+  {
+    type: "function",
+    name: "itemPageCount",
+    stateMutability: "view",
+    inputs: [{ name: "", type: "uint256" }],
+    outputs: [{ name: "", type: "uint256" }]
+  },
+  {
+    type: "function",
+    name: "itemDefaultPageVersion",
+    stateMutability: "view",
+    inputs: [{ name: "", type: "uint256" }],
+    outputs: [{ name: "", type: "uint256" }]
+  },
+  {
+    type: "function",
+    name: "getItemPage",
+    stateMutability: "view",
+    inputs: [
+      { name: "itemId", type: "uint256" },
+      { name: "version", type: "uint256" }
+    ],
+    outputs: [
+      { name: "contentHash", type: "bytes32" },
+      { name: "uri", type: "string" }
+    ]
   }
 ];
 
@@ -109,4 +269,3 @@ export const erc20Abi = [
     outputs: [{ name: "", type: "bool" }]
   }
 ];
-

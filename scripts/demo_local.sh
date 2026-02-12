@@ -14,6 +14,7 @@ require_cmd cast
 require_cmd node
 require_cmd pnpm
 require_cmd nc
+require_cmd curl
 
 ANVIL_PORT="${ANVIL_PORT:-8545}"
 WORKER_PORT="${WORKER_PORT:-8787}"
@@ -103,7 +104,30 @@ echo "starting worker (watch + permit)..."
 ) > "${WORKER_LOG}" 2>&1 &
 WORKER_PID="$!"
 
-sleep 1
+echo "waiting for worker health..."
+for _ in $(seq 1 50); do
+  if curl -sf "http://127.0.0.1:${WORKER_PORT}/health" >/dev/null 2>&1; then
+    break
+  fi
+  sleep 0.1
+done
+
+if ! curl -sf "http://127.0.0.1:${WORKER_PORT}/health" >/dev/null 2>&1; then
+  echo "worker not ready on port ${WORKER_PORT}" >&2
+  tail -n 120 "${WORKER_LOG}" || true
+  exit 1
+fi
+
+if [ "${ENABLE_API:-0}" = "1" ]; then
+  API_PORT="${API_PORT:-8788}"
+  echo "waiting for query api health..."
+  for _ in $(seq 1 50); do
+    if curl -sf "http://127.0.0.1:${API_PORT}/health" >/dev/null 2>&1; then
+      break
+    fi
+    sleep 0.1
+  done
+fi
 
 echo "approving usdc for buyer..."
 cast send --rpc-url "${RPC_URL}" --private-key "${BUYER_PK}" "${DEMO_USDC}" \
@@ -131,4 +155,14 @@ else
   echo "Purchased payload not found in ${WORKER_LOG}" >&2
   tail -n 120 "${WORKER_LOG}" || true
   exit 1
+fi
+
+if [ "${ENABLE_API:-0}" = "1" ]; then
+  API_PORT="${API_PORT:-8788}"
+  echo "query api: http://127.0.0.1:${API_PORT}"
+  curl -s "http://127.0.0.1:${API_PORT}/config" | node -e "process.stdin.on('data',d=>console.log(d.toString().trim()))"
+  curl -s "http://127.0.0.1:${API_PORT}/indexer" | node -e "process.stdin.on('data',d=>console.log(d.toString().trim()))"
+  curl -s "http://127.0.0.1:${API_PORT}/shops?limit=1" | node -e "process.stdin.on('data',d=>console.log(d.toString().trim()))"
+  curl -s "http://127.0.0.1:${API_PORT}/items?limit=1" | node -e "process.stdin.on('data',d=>console.log(d.toString().trim()))"
+  curl -s "http://127.0.0.1:${API_PORT}/purchases?limit=1" | node -e "process.stdin.on('data',d=>console.log(d.toString().trim()))"
 fi

@@ -14,6 +14,7 @@
 - 入口：[worker/src/index.js](file:///Users/jason/Dev/crypto-projects/MyShop/worker/src/index.js)
 - 购买监听：[worker/src/watchPurchased.js](file:///Users/jason/Dev/crypto-projects/MyShop/worker/src/watchPurchased.js)
 - Permit 服务：[worker/src/permitServer.js](file:///Users/jason/Dev/crypto-projects/MyShop/worker/src/permitServer.js)
+- Query API 服务：[worker/src/apiServer.js](file:///Users/jason/Dev/crypto-projects/MyShop/worker/src/apiServer.js)
 
 ## 启动
 
@@ -42,6 +43,13 @@ pnpm run dev
   - `SERIAL_SIGNER_PRIVATE_KEY`（用于 `/serial-permit`）
   - `RISK_SIGNER_PRIVATE_KEY`（用于 `/risk-allowance`）
   - `SERIAL_ISSUER_URL`（可选：让服务端先向外部系统申请串号/哈希，再回签）
+- **聚合查询 API（可选）**
+  - `ENABLE_API=1`
+  - `API_PORT`（默认 8788）
+  - `ENABLE_INDEXER=1`（默认开启：内存索引 Purchased）
+  - `INDEXER_POLL_INTERVAL_MS`（默认 1000）
+  - `INDEXER_LOOKBACK_BLOCKS`（默认 5000）
+  - `INDEXER_MAX_RECORDS`（默认 5000）
 
 ## Permit API
 
@@ -79,3 +87,66 @@ pnpm run dev
 `GET /risk-allowance?shopOwner=&maxItems=&deadline=&nonce=`
 
 返回 `signature`（用于 `addItem` 的 `signature` 字段）。
+
+## Query API（聚合查询）
+
+默认不开启，设置 `ENABLE_API=1` 后启用。
+
+### 一条命令启动（示例）
+
+```bash
+MODE=both ENABLE_API=1 RPC_URL=http://127.0.0.1:8545 CHAIN_ID=31337 ITEMS_ADDRESS=0x... PORT=8787 API_PORT=8788 pnpm run dev
+```
+
+### health
+
+`GET /health`
+
+### config
+
+`GET /config`
+
+返回 `chainId / itemsAddress / shopsAddress` 等基础信息。
+
+### indexer
+
+`GET /indexer`
+
+查看索引状态（`lastIndexedBlock` / `cachedPurchases`）。
+
+### shop
+
+`GET /shop?shopId=`
+
+### shops
+
+`GET /shops?cursor=&limit=`
+
+### item
+
+`GET /item?itemId=`
+
+### items
+
+`GET /items?cursor=&limit=`
+
+### purchases
+
+`GET /purchases?fromBlock=&toBlock=&buyer=&shopId=&itemId=&limit=&include=&source=`
+
+- `fromBlock/toBlock`：不填会默认查询最近一段区间
+- `buyer/shopId/itemId`：按 indexed 字段过滤
+- `include`：默认包含 `enrich`（会额外返回 `item/shop` 链上读取结果），传 `include=` 可关闭 enrich
+- `source`：`index`（默认）或 `chain`（强制走链上 getLogs）
+
+### 常用请求（curl）
+
+```bash
+curl -s http://127.0.0.1:8788/config
+curl -s http://127.0.0.1:8788/indexer
+curl -s "http://127.0.0.1:8788/shops?cursor=1&limit=20"
+curl -s "http://127.0.0.1:8788/items?cursor=1&limit=20"
+curl -s "http://127.0.0.1:8788/purchases?limit=50"
+curl -s "http://127.0.0.1:8788/purchases?buyer=0x...&limit=50"
+curl -s "http://127.0.0.1:8788/purchases?source=chain&fromBlock=0"
+```

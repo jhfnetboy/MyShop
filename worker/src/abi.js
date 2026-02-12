@@ -17,6 +17,13 @@ export const myShopItemsAbi = [
   },
   {
     type: "function",
+    name: "itemCount",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "uint256" }]
+  },
+  {
+    type: "function",
     name: "shops",
     stateMutability: "view",
     inputs: [],
@@ -53,6 +60,13 @@ export const myShopItemsAbi = [
 ];
 
 export const myShopsAbi = [
+  {
+    type: "function",
+    name: "shopCount",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "uint256" }]
+  },
   {
     type: "function",
     name: "shops",

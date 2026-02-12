@@ -75,7 +75,7 @@
 
 - AAStar Registry 负责“社区身份与角色”；MyShop 只做“消费与售卖平台”。
 - MyShop 不直接持有长周期的私钥；任何需要私钥签名的 offchain 行为放在服务端（后续 API 层），并通过签名/nonce/过期时间来约束链上可验证动作。
-- “NFT 销售 + 绑定动作”在链上只保证原子性边界内的部分；对于必须调用外部 API 的动作，采用“链上可验证的预签名凭证”来保持原子性，或采用异步最终一致的补偿机制（见第 5 章）。
+- “NFT 销售 + 绑定动作执行”在链上只保证原子性边界内的部分；对于必须调用外部 API 的动作，采用“链上可验证的预签名凭证”来保持原子性，或采用异步最终一致的补偿机制（见第 5 章）。
 
 ---
 
@@ -401,18 +401,19 @@ Action 的安全边界：
 
 ## 11. 里程碑与演进计划（从可跑到可规模化）
 
-- M0（当前）：参考代码与设计对齐
+- 五步走对应关系：Step1=M0，Step2=M1，Step3=M2，Step4=M3，Step5=M4
+- M0（Done）：参考代码与设计对齐
   - reference 已就位；明确 contracts/frontend 的结构与边界
-- M1：最小闭环（前端直连合约）
-  - 只支持 1 个示例 item：mint NFT + mint 固定 aPNTs（原子）
+- M1（Done）：最小闭环（前端直连合约）
   - shop 注册必须是 community
-- M2：售卖合约上线（带风控）
+  - 示例 item：mint NFT + mint 固定 aPNTs（原子）
+- M2（Mostly Done）：售卖合约上线（带风控）
   - aPNTsSale、GTokenSale 基本规则齐全（cap/limits/events/pausable）
-  - 前端增加“风险评估页”（主要读取链上事件 + 统计）
-- M3：API 提取与索引
-  - Shop/Item/Purchase 的聚合查询与缓存
-  - 预签名 serial/notify 的编排能力
-- M4：SDK 整合与地址稳定
+  - 风险评估页：延后（优先级低于 M3 的 API/索引）
+- M3（Done for demo）：API 提取与索引
+  - 已完成：worker（监听 Purchased + payload enrich + 预签名 SerialPermit/RiskAllowance + 可选通知）
+  - 已完成：Query API（/shops /items /purchases）+ 内存索引（ENABLE_INDEXER）
+- M4（Todo）：SDK 整合与地址稳定
   - MyShop 合约地址进入 `aastar-sdk` 的地址源
   - `aastar-sdk` 增加 MyShop client（与 registry 角色体系一致）
 
@@ -424,3 +425,4 @@ Action 的安全边界：
 - 序列号强原子：采用“预签名凭证”模式（5.1）
 - aPNTs 的风控强度：发行速率限制与 timelock 是否必须从 Day 1 开始启用
 - 平台费率与分润：Item 上架费用默认 100 aPNTs；成交费率默认 3%（后续可按品类细化）
+

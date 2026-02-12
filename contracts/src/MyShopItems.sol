@@ -28,6 +28,9 @@ contract MyShopItems {
     address public serialSigner;
 
     uint256 public constant DEFAULT_MAX_ITEMS_PER_SHOP = 5;
+    uint8 internal constant ROLE_ITEM_MAINTAINER = 2;
+    uint8 internal constant ROLE_ITEM_EDITOR = 4;
+    uint8 internal constant ROLE_ITEM_ACTION_EDITOR = 8;
 
     mapping(address => mapping(uint256 => bool)) public usedNonces;
     mapping(address => bool) public allowedActions;
@@ -45,6 +48,20 @@ contract MyShopItems {
         bytes actionData;
         bool requiresSerial;
         bool active;
+    }
+
+    struct ItemPage {
+        bytes32 contentHash;
+        string uri;
+    }
+
+    struct UpdateItemParams {
+        address payToken;
+        uint256 unitPrice;
+        address nftContract;
+        bool soulbound;
+        string tokenURI;
+        bool requiresSerial;
     }
 
     struct PurchaseContext {
@@ -86,6 +103,9 @@ contract MyShopItems {
 
     mapping(uint256 => Item) public items;
     mapping(uint256 => uint256) public shopItemCount;
+    mapping(uint256 => uint256) public itemPageCount;
+    mapping(uint256 => uint256) public itemDefaultPageVersion;
+    mapping(uint256 => mapping(uint256 => ItemPage)) internal itemPages;
 
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
     event RiskSignerUpdated(address indexed signer);
@@ -93,6 +113,10 @@ contract MyShopItems {
     event ActionAllowed(address indexed action, bool allowed);
     event ItemAdded(uint256 indexed itemId, uint256 indexed shopId, address indexed shopOwner);
     event ItemStatusChanged(uint256 indexed itemId, bool active);
+    event ItemUpdated(uint256 indexed itemId);
+    event ItemActionUpdated(uint256 indexed itemId, address indexed action);
+    event ItemPageVersionAdded(uint256 indexed itemId, uint256 indexed version, bytes32 contentHash, string uri);
+    event ItemDefaultPageVersionSet(uint256 indexed itemId, uint256 indexed version);
     event Purchased(
         uint256 indexed itemId,
         uint256 indexed shopId,
@@ -120,6 +144,8 @@ contract MyShopItems {
     error NonceUsed();
     error SerialRequired();
     error ActionNotAllowed();
+    error InvalidVersion();
+    error InvalidURI();
 
     constructor(address shops_, address riskSigner_, address serialSigner_) {
         if (shops_ == address(0)) revert InvalidAddress();
@@ -161,8 +187,9 @@ contract MyShopItems {
     function setItemActive(uint256 itemId, bool active) external {
         Item storage item = items[itemId];
         if (!item.active && item.shopId == 0) revert ItemNotFound();
-        (address shopOwner,,,) = shops.shops(item.shopId);
-        if (shopOwner != msg.sender && msg.sender != owner) revert NotShopOwner();
+        if (msg.sender != owner && !shops.hasShopRole(item.shopId, msg.sender, ROLE_ITEM_MAINTAINER)) {
+            revert NotShopOwner();
+        }
         item.active = active;
         emit ItemStatusChanged(itemId, active);
     }
@@ -171,7 +198,7 @@ contract MyShopItems {
         (address shopOwner,,, bool shopPaused) = shops.shops(p.shopId);
         if (shopOwner == address(0)) revert InvalidAddress();
         if (shopPaused) revert ShopPaused();
-        if (shopOwner != msg.sender) revert NotShopOwner();
+        if (!shops.hasShopRole(p.shopId, msg.sender, ROLE_ITEM_EDITOR)) revert NotShopOwner();
         if (p.nftContract == address(0) || p.unitPrice == 0) revert InvalidAddress();
         if (p.action != address(0) && !allowedActions[p.action]) revert ActionNotAllowed();
 
@@ -200,6 +227,65 @@ contract MyShopItems {
         shopItemCount[p.shopId] += 1;
 
         emit ItemAdded(itemId, p.shopId, msg.sender);
+    }
+
+    function updateItem(uint256 itemId, UpdateItemParams calldata p) external {
+        Item storage item = items[itemId];
+        if (!item.active && item.shopId == 0) revert ItemNotFound();
+        if (!shops.hasShopRole(item.shopId, msg.sender, ROLE_ITEM_EDITOR)) revert NotShopOwner();
+        if (p.nftContract == address(0) || p.unitPrice == 0) revert InvalidAddress();
+
+        item.payToken = p.payToken;
+        item.unitPrice = p.unitPrice;
+        item.nftContract = p.nftContract;
+        item.soulbound = p.soulbound;
+        item.tokenURI = p.tokenURI;
+        item.requiresSerial = p.requiresSerial;
+
+        emit ItemUpdated(itemId);
+    }
+
+    function updateItemAction(uint256 itemId, address action, bytes calldata actionData) external {
+        Item storage item = items[itemId];
+        if (!item.active && item.shopId == 0) revert ItemNotFound();
+        if (!shops.hasShopRole(item.shopId, msg.sender, ROLE_ITEM_ACTION_EDITOR)) revert NotShopOwner();
+        if (action != address(0) && !allowedActions[action]) revert ActionNotAllowed();
+
+        item.action = action;
+        item.actionData = actionData;
+        emit ItemActionUpdated(itemId, action);
+    }
+
+    function addItemPageVersion(uint256 itemId, string calldata uri, bytes32 contentHash)
+        external
+        returns (uint256 version)
+    {
+        Item storage item = items[itemId];
+        if (!item.active && item.shopId == 0) revert ItemNotFound();
+        if (!shops.hasShopRole(item.shopId, msg.sender, ROLE_ITEM_EDITOR)) revert NotShopOwner();
+        if (bytes(uri).length == 0) revert InvalidURI();
+
+        version = ++itemPageCount[itemId];
+        itemPages[itemId][version] = ItemPage({contentHash: contentHash, uri: uri});
+        itemDefaultPageVersion[itemId] = version;
+        emit ItemPageVersionAdded(itemId, version, contentHash, uri);
+        emit ItemDefaultPageVersionSet(itemId, version);
+    }
+
+    function setItemDefaultPageVersion(uint256 itemId, uint256 version) external {
+        Item storage item = items[itemId];
+        if (!item.active && item.shopId == 0) revert ItemNotFound();
+        if (!shops.hasShopRole(item.shopId, msg.sender, ROLE_ITEM_EDITOR)) revert NotShopOwner();
+        if (version == 0 || version > itemPageCount[itemId]) revert InvalidVersion();
+
+        itemDefaultPageVersion[itemId] = version;
+        emit ItemDefaultPageVersionSet(itemId, version);
+    }
+
+    function getItemPage(uint256 itemId, uint256 version) external view returns (bytes32 contentHash, string memory uri) {
+        if (version == 0 || version > itemPageCount[itemId]) revert InvalidVersion();
+        ItemPage storage page = itemPages[itemId][version];
+        return (page.contentHash, page.uri);
     }
 
     function buy(uint256 itemId, uint256 quantity, address recipient, bytes calldata extraData)

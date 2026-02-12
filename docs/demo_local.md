@@ -7,6 +7,7 @@
 - 启动 anvil
 - 部署 demo 合约并生成 `demo/demo.json`
 - 启动 worker（监听 Purchased + 提供 permit API）
+- （可选）启动 Query API（聚合查询 + 索引）
 - 通过 worker 申请 `SerialPermit`，完成一次购买并看到 worker 输出
 
 ## 依赖
@@ -20,6 +21,12 @@
 
 ```bash
 bash scripts/demo_local.sh
+```
+
+开启 Query API（会在脚本末尾额外请求 `/config` 和 `/purchases`）：
+
+```bash
+ENABLE_API=1 API_PORT=8788 bash scripts/demo_local.sh
 ```
 
 脚本会使用 anvil 默认账户私钥（可通过环境变量覆盖）：

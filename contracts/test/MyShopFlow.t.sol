@@ -196,6 +196,48 @@ contract MyShopFlowTest is Test {
         assertEq(nft.ownerOf(1), recipient);
     }
 
+    function test_shopOperator_canManageItems_andPages() external {
+        address operator = address(0x0B0B);
+
+        vm.startPrank(community);
+        uint8 roles = shops.ROLE_ITEM_EDITOR() | shops.ROLE_ITEM_MAINTAINER() | shops.ROLE_ITEM_ACTION_EDITOR();
+        shops.setShopRoles(1, operator, roles);
+        vm.stopPrank();
+
+        apnts.mint(operator, 10_000 ether);
+        vm.prank(operator);
+        apnts.approve(address(items), type(uint256).max);
+
+        vm.prank(operator);
+        uint256 itemId = _addItem(false, 0, 0, 0, bytes(""));
+
+        vm.prank(operator);
+        items.setItemActive(itemId, false);
+        (, , , , , , , , , bool activeAfter) = items.items(itemId);
+        assertEq(activeAfter, false);
+
+        vm.prank(operator);
+        items.setItemActive(itemId, true);
+
+        vm.prank(operator);
+        uint256 v1 = items.addItemPageVersion(itemId, "https://example.com/v1", bytes32(uint256(1)));
+        assertEq(v1, 1);
+        assertEq(items.itemDefaultPageVersion(itemId), 1);
+
+        vm.prank(operator);
+        uint256 v2 = items.addItemPageVersion(itemId, "https://example.com/v2", bytes32(uint256(2)));
+        assertEq(v2, 2);
+        assertEq(items.itemDefaultPageVersion(itemId), 2);
+
+        (bytes32 h, string memory uri) = items.getItemPage(itemId, 1);
+        assertEq(h, bytes32(uint256(1)));
+        assertEq(uri, "https://example.com/v1");
+
+        vm.prank(operator);
+        items.setItemDefaultPageVersion(itemId, 1);
+        assertEq(items.itemDefaultPageVersion(itemId), 1);
+    }
+
     function _domainSeparator() internal view returns (bytes32) {
         return keccak256(
             abi.encode(

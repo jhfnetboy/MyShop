@@ -56,6 +56,18 @@ function requireHexBytes(value, field) {
   return value;
 }
 
+function pick(obj, key, index) {
+  const value = obj?.[key] ?? obj?.[index];
+  if (value === undefined) throw new Error(`Unable to read ${key}`);
+  return value;
+}
+
+function toHttpUri(uri) {
+  if (!uri) return "";
+  if (uri.startsWith("ipfs://")) return `https://ipfs.io/ipfs/${uri.slice("ipfs://".length)}`;
+  return uri;
+}
+
 async function connect() {
   if (!window.ethereum) throw new Error("Missing window.ethereum");
   walletClient = createWalletClient({
@@ -89,6 +101,72 @@ async function readItem() {
     args: [itemId]
   });
   setText("itemOut", JSON.stringify(item, null, 2));
+
+  const tokenURI = pick(item, "tokenURI", 5);
+  const metaUrl = toHttpUri(tokenURI);
+  let metadata = null;
+  if (metaUrl) {
+    try {
+      const res = await fetch(metaUrl);
+      metadata = await res.json();
+    } catch {
+      metadata = null;
+    }
+  }
+
+  let page = null;
+  try {
+    const defaultVersion = await publicClient.readContract({
+      address: itemsAddress,
+      abi: myShopItemsAbi,
+      functionName: "itemDefaultPageVersion",
+      args: [itemId]
+    });
+    const v = BigInt(defaultVersion);
+    if (v > 0n) {
+      const raw = await publicClient.readContract({
+        address: itemsAddress,
+        abi: myShopItemsAbi,
+        functionName: "getItemPage",
+        args: [itemId, v]
+      });
+      page = {
+        version: v.toString(),
+        contentHash: pick(raw, "contentHash", 0),
+        uri: pick(raw, "uri", 1)
+      };
+    }
+  } catch {
+    page = null;
+  }
+
+  const metaBox = document.getElementById("itemMetaOut");
+  metaBox.innerHTML = "";
+
+  if (metadata) {
+    metaBox.appendChild(el("div", {}, [el("div", { text: `metadata.name: ${metadata.name ?? ""}` })]));
+    metaBox.appendChild(el("div", {}, [el("div", { text: `metadata.description: ${metadata.description ?? ""}` })]));
+
+    const image = toHttpUri(metadata.image || metadata.image_url || "");
+    if (image) {
+      metaBox.appendChild(el("img", { src: image, style: "max-width: 240px; display: block; margin: 8px 0;" }));
+      metaBox.appendChild(el("a", { href: image, target: "_blank", rel: "noreferrer", text: "open image" }));
+    }
+    if (metadata.external_url) {
+      metaBox.appendChild(
+        el("div", {}, [el("a", { href: metadata.external_url, target: "_blank", rel: "noreferrer", text: "external_url" })])
+      );
+    }
+  } else if (metaUrl) {
+    metaBox.appendChild(el("div", { text: `metadata fetch failed: ${metaUrl}` }));
+  }
+
+  if (page) {
+    metaBox.appendChild(el("hr"));
+    metaBox.appendChild(el("div", { text: `default page version: ${page.version}` }));
+    metaBox.appendChild(el("div", { text: `contentHash: ${page.contentHash}` }));
+    metaBox.appendChild(el("a", { href: page.uri, target: "_blank", rel: "noreferrer", text: page.uri }));
+  }
 }
 
 async function registerShop() {
@@ -209,6 +287,268 @@ async function buy() {
   setText("txOut", `buy tx: ${hash}`);
 }
 
+async function setShopRolesTx() {
+  if (!walletClient || !connectedAddress) throw new Error("connect wallet first");
+  const shopsAddress = requireAddress(val("shopsAddress"), "shopsAddress");
+  const shopId = BigInt(val("shopIdRole"));
+  const operator = requireAddress(val("roleOperator"), "operator");
+
+  const shopAdmin = document.getElementById("roleShopAdmin").checked ? 1 : 0;
+  const maintainer = document.getElementById("roleItemMaintainer").checked ? 2 : 0;
+  const editor = document.getElementById("roleItemEditor").checked ? 4 : 0;
+  const actionEditor = document.getElementById("roleItemActionEditor").checked ? 8 : 0;
+  const roles = shopAdmin | maintainer | editor | actionEditor;
+
+  const hash = await walletClient.writeContract({
+    address: shopsAddress,
+    abi: myShopsAbi,
+    functionName: "setShopRoles",
+    args: [shopId, operator, roles],
+    account: connectedAddress
+  });
+  setText("txOut", `setShopRoles tx: ${hash}`);
+}
+
+async function updateItemTx() {
+  if (!walletClient || !connectedAddress) throw new Error("connect wallet first");
+  const itemsAddress = requireAddress(val("itemsAddress"), "itemsAddress");
+  const itemId = BigInt(val("itemIdUpdate"));
+  const p = {
+    payToken: requireAddress(val("payTokenUpdate"), "payToken"),
+    unitPrice: BigInt(val("unitPriceUpdate")),
+    nftContract: requireAddress(val("nftContractUpdate"), "nftContract"),
+    soulbound: val("soulboundUpdate") === "true",
+    tokenURI: val("tokenURIUpdate"),
+    requiresSerial: val("requiresSerialUpdate") === "true"
+  };
+
+  const hash = await walletClient.writeContract({
+    address: itemsAddress,
+    abi: myShopItemsAbi,
+    functionName: "updateItem",
+    args: [itemId, p],
+    account: connectedAddress
+  });
+  setText("txOut", `updateItem tx: ${hash}`);
+}
+
+async function updateItemActionTx() {
+  if (!walletClient || !connectedAddress) throw new Error("connect wallet first");
+  const itemsAddress = requireAddress(val("itemsAddress"), "itemsAddress");
+  const itemId = BigInt(val("itemIdUpdateAction"));
+  const action = val("actionUpdate") ? requireAddress(val("actionUpdate"), "action") : "0x0000000000000000000000000000000000000000";
+  const actionData = requireHexBytes(val("actionDataUpdate"), "actionData");
+
+  const hash = await walletClient.writeContract({
+    address: itemsAddress,
+    abi: myShopItemsAbi,
+    functionName: "updateItemAction",
+    args: [itemId, action, actionData],
+    account: connectedAddress
+  });
+  setText("txOut", `updateItemAction tx: ${hash}`);
+}
+
+async function addItemPageTx() {
+  if (!walletClient || !connectedAddress) throw new Error("connect wallet first");
+  const itemsAddress = requireAddress(val("itemsAddress"), "itemsAddress");
+  const itemId = BigInt(val("itemIdPage"));
+  const uri = val("pageUri");
+  const contentHash = val("pageHash") || "0x" + "0".repeat(64);
+
+  const hash = await walletClient.writeContract({
+    address: itemsAddress,
+    abi: myShopItemsAbi,
+    functionName: "addItemPageVersion",
+    args: [itemId, uri, contentHash],
+    account: connectedAddress
+  });
+  setText("txOut", `addItemPageVersion tx: ${hash}`);
+}
+
+async function setDefaultItemPageTx() {
+  if (!walletClient || !connectedAddress) throw new Error("connect wallet first");
+  const itemsAddress = requireAddress(val("itemsAddress"), "itemsAddress");
+  const itemId = BigInt(val("itemIdDefaultPage"));
+  const version = BigInt(val("defaultPageVersion"));
+
+  const hash = await walletClient.writeContract({
+    address: itemsAddress,
+    abi: myShopItemsAbi,
+    functionName: "setItemDefaultPageVersion",
+    args: [itemId, version],
+    account: connectedAddress
+  });
+  setText("txOut", `setItemDefaultPageVersion tx: ${hash}`);
+}
+
+async function exportShopItemsTx() {
+  const itemsAddress = requireAddress(val("itemsAddress"), "itemsAddress");
+  const shopId = BigInt(val("shopIdExport"));
+
+  const count = await publicClient.readContract({
+    address: itemsAddress,
+    abi: myShopItemsAbi,
+    functionName: "itemCount",
+    args: []
+  });
+
+  const total = Number(BigInt(count));
+  const list = [];
+
+  for (let i = 1; i <= total; i++) {
+    const itemId = BigInt(i);
+    const raw = await publicClient.readContract({
+      address: itemsAddress,
+      abi: myShopItemsAbi,
+      functionName: "items",
+      args: [itemId]
+    });
+    const itemShopId = BigInt(pick(raw, "shopId", 0));
+    if (itemShopId !== shopId) continue;
+
+    const pageCount = await publicClient.readContract({
+      address: itemsAddress,
+      abi: myShopItemsAbi,
+      functionName: "itemPageCount",
+      args: [itemId]
+    });
+    const pageTotal = Number(BigInt(pageCount));
+    const pages = [];
+    for (let v = 1; v <= pageTotal; v++) {
+      const pageRaw = await publicClient.readContract({
+        address: itemsAddress,
+        abi: myShopItemsAbi,
+        functionName: "getItemPage",
+        args: [itemId, BigInt(v)]
+      });
+      pages.push({
+        version: String(v),
+        contentHash: pick(pageRaw, "contentHash", 0),
+        uri: pick(pageRaw, "uri", 1)
+      });
+    }
+
+    const defaultVersion = await publicClient.readContract({
+      address: itemsAddress,
+      abi: myShopItemsAbi,
+      functionName: "itemDefaultPageVersion",
+      args: [itemId]
+    });
+
+    list.push({
+      itemId: itemId.toString(),
+      item: {
+        shopId: pick(raw, "shopId", 0).toString(),
+        payToken: pick(raw, "payToken", 1),
+        unitPrice: pick(raw, "unitPrice", 2).toString(),
+        nftContract: pick(raw, "nftContract", 3),
+        soulbound: pick(raw, "soulbound", 4),
+        tokenURI: pick(raw, "tokenURI", 5),
+        action: pick(raw, "action", 6),
+        actionData: pick(raw, "actionData", 7),
+        requiresSerial: pick(raw, "requiresSerial", 8),
+        active: pick(raw, "active", 9)
+      },
+      pages,
+      defaultPageVersion: BigInt(defaultVersion).toString()
+    });
+  }
+
+  const payload = {
+    version: 1,
+    chainId: chain.id,
+    itemsAddress,
+    shopId: shopId.toString(),
+    exportedAt: new Date().toISOString(),
+    items: list
+  };
+
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = el("a", { href: url, download: `myshop_shop_${shopId.toString()}_items.json` });
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+  setText("txOut", `exported ${list.length} items`);
+}
+
+async function importShopItemsTx() {
+  if (!walletClient || !connectedAddress) throw new Error("connect wallet first");
+  const itemsAddress = requireAddress(val("itemsAddress"), "itemsAddress");
+  const text = val("importJson");
+  if (!text) throw new Error("import json required");
+  const data = JSON.parse(text);
+  if (!Array.isArray(data.items)) throw new Error("invalid import json: items");
+
+  for (const entry of data.items) {
+    const it = entry.item;
+    const p = {
+      shopId: BigInt(it.shopId),
+      payToken: requireAddress(it.payToken, "payToken"),
+      unitPrice: BigInt(it.unitPrice),
+      nftContract: requireAddress(it.nftContract, "nftContract"),
+      soulbound: Boolean(it.soulbound),
+      tokenURI: String(it.tokenURI || ""),
+      action: it.action && it.action !== "0x0000000000000000000000000000000000000000" ? requireAddress(it.action, "action") : "0x0000000000000000000000000000000000000000",
+      actionData: requireHexBytes(it.actionData || "0x", "actionData"),
+      requiresSerial: Boolean(it.requiresSerial),
+      maxItems: 0n,
+      deadline: 0n,
+      nonce: 0n,
+      signature: "0x"
+    };
+
+    const hash = await walletClient.writeContract({
+      address: itemsAddress,
+      abi: myShopItemsAbi,
+      functionName: "addItem",
+      args: [p],
+      account: connectedAddress
+    });
+    await publicClient.waitForTransactionReceipt({ hash });
+
+    const newCount = await publicClient.readContract({
+      address: itemsAddress,
+      abi: myShopItemsAbi,
+      functionName: "itemCount",
+      args: []
+    });
+    const newItemId = BigInt(newCount);
+
+    if (Array.isArray(entry.pages)) {
+      for (const pg of entry.pages) {
+        const pageHash = pg.contentHash || "0x" + "0".repeat(64);
+        const pageUri = String(pg.uri || "");
+        if (!pageUri) continue;
+        const h2 = await walletClient.writeContract({
+          address: itemsAddress,
+          abi: myShopItemsAbi,
+          functionName: "addItemPageVersion",
+          args: [newItemId, pageUri, pageHash],
+          account: connectedAddress
+        });
+        await publicClient.waitForTransactionReceipt({ hash: h2 });
+      }
+    }
+
+    const defV = BigInt(entry.defaultPageVersion || "0");
+    if (defV > 0n) {
+      const h3 = await walletClient.writeContract({
+        address: itemsAddress,
+        abi: myShopItemsAbi,
+        functionName: "setItemDefaultPageVersion",
+        args: [newItemId, defV],
+        account: connectedAddress
+      });
+      await publicClient.waitForTransactionReceipt({ hash: h3 });
+    }
+  }
+
+  setText("txOut", "import done");
+}
+
 function render() {
   const app = document.getElementById("app");
   app.innerHTML = "";
@@ -254,7 +594,40 @@ function render() {
       el("pre", { id: "shopOut" }),
       inputRow("itemId", "itemIdRead", "1"),
       el("button", { text: "Read Item", onclick: () => readItem().catch((e) => setText("txOut", String(e))) }),
-      el("pre", { id: "itemOut" })
+      el("pre", { id: "itemOut" }),
+      el("div", { id: "itemMetaOut" })
+    ])
+  );
+
+  app.appendChild(el("hr"));
+
+  app.appendChild(
+    el("div", {}, [
+      el("h2", { text: "Shop Roles" }),
+      inputRow("shopId", "shopIdRole", "1"),
+      inputRow("operator", "roleOperator"),
+      el("div", {}, [
+        el("label", {}, [el("input", { id: "roleShopAdmin", type: "checkbox" }), el("span", { text: " shop admin(1)" })])
+      ]),
+      el("div", {}, [
+        el("label", {}, [
+          el("input", { id: "roleItemMaintainer", type: "checkbox", checked: true }),
+          el("span", { text: " item maintainer(2)" })
+        ])
+      ]),
+      el("div", {}, [
+        el("label", {}, [
+          el("input", { id: "roleItemEditor", type: "checkbox", checked: true }),
+          el("span", { text: " item editor(4)" })
+        ])
+      ]),
+      el("div", {}, [
+        el("label", {}, [
+          el("input", { id: "roleItemActionEditor", type: "checkbox", checked: true }),
+          el("span", { text: " item+action editor(8)" })
+        ])
+      ]),
+      el("button", { text: "Set Roles", onclick: () => setShopRolesTx().catch((e) => setText("txOut", String(e))) })
     ])
   );
 
@@ -266,6 +639,59 @@ function render() {
       inputRow("treasury", "shopTreasury"),
       inputRow("metadataHash(bytes32)", "shopMetadataHash", "0x" + "0".repeat(64)),
       el("button", { text: "Register", onclick: () => registerShop().catch((e) => setText("txOut", String(e))) })
+    ])
+  );
+
+  app.appendChild(el("hr"));
+
+  app.appendChild(
+    el("div", {}, [
+      el("h2", { text: "Update Item (basic)" }),
+      inputRow("itemId", "itemIdUpdate", "1"),
+      inputRow("payToken", "payTokenUpdate"),
+      inputRow("unitPrice", "unitPriceUpdate", "1000"),
+      inputRow("nftContract", "nftContractUpdate"),
+      inputRow("soulbound(true|false)", "soulboundUpdate", "true"),
+      inputRow("tokenURI", "tokenURIUpdate", "ipfs://token"),
+      inputRow("requiresSerial(true|false)", "requiresSerialUpdate", "true"),
+      el("button", { text: "Update Item", onclick: () => updateItemTx().catch((e) => setText("txOut", String(e))) })
+    ])
+  );
+
+  app.appendChild(el("hr"));
+
+  app.appendChild(
+    el("div", {}, [
+      el("h2", { text: "Update Item Action" }),
+      inputRow("itemId", "itemIdUpdateAction", "1"),
+      inputRow("action", "actionUpdate", "0x0000000000000000000000000000000000000000"),
+      inputRow("actionData(hex)", "actionDataUpdate", "0x"),
+      el("button", {
+        text: "Update Action",
+        onclick: () => updateItemActionTx().catch((e) => setText("txOut", String(e)))
+      })
+    ])
+  );
+
+  app.appendChild(el("hr"));
+
+  app.appendChild(
+    el("div", {}, [
+      el("h2", { text: "Item Page (versioned)" }),
+      inputRow("itemId", "itemIdPage", "1"),
+      inputRow("uri", "pageUri", "https://example.com"),
+      inputRow("contentHash(bytes32 optional)", "pageHash", "0x" + "0".repeat(64)),
+      el("button", {
+        text: "Add Page Version",
+        onclick: () => addItemPageTx().catch((e) => setText("txOut", String(e)))
+      }),
+      el("h3", { text: "Default Page" }),
+      inputRow("itemId", "itemIdDefaultPage", "1"),
+      inputRow("version", "defaultPageVersion", "1"),
+      el("button", {
+        text: "Set Default",
+        onclick: () => setDefaultItemPageTx().catch((e) => setText("txOut", String(e)))
+      })
     ])
   );
 
@@ -298,6 +724,22 @@ function render() {
 
   app.appendChild(
     el("div", {}, [
+      el("h2", { text: "Backup / Restore Items" }),
+      inputRow("shopId", "shopIdExport", "1"),
+      el("button", {
+        text: "Export Shop Items (json)",
+        onclick: () => exportShopItemsTx().catch((e) => setText("txOut", String(e)))
+      }),
+      el("h3", { text: "Import (paste json)" }),
+      el("textarea", { id: "importJson", rows: "8", style: "width: 100%;", placeholder: "{...}" }),
+      el("button", { text: "Import Items", onclick: () => importShopItemsTx().catch((e) => setText("txOut", String(e))) })
+    ])
+  );
+
+  app.appendChild(el("hr"));
+
+  app.appendChild(
+    el("div", {}, [
       el("h2", { text: "Buy" }),
       inputRow("itemId", "buyItemId", "1"),
       inputRow("qty", "buyQty", "1"),
@@ -321,4 +763,3 @@ function render() {
 }
 
 render();
-

@@ -9,6 +9,11 @@ interface IRegistryHasRole {
 contract MyShops {
     bytes32 public constant ROLE_COMMUNITY = keccak256("COMMUNITY");
 
+    uint8 public constant ROLE_SHOP_ADMIN = 1;
+    uint8 public constant ROLE_ITEM_MAINTAINER = 2;
+    uint8 public constant ROLE_ITEM_EDITOR = 4;
+    uint8 public constant ROLE_ITEM_ACTION_EDITOR = 8;
+
     address public owner;
     address public registry;
 
@@ -27,6 +32,7 @@ contract MyShops {
     }
 
     mapping(uint256 => Shop) public shops;
+    mapping(uint256 => mapping(address => uint8)) public shopRoles;
 
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
     event RegistryUpdated(address indexed registry);
@@ -38,6 +44,7 @@ contract MyShops {
     );
     event ShopUpdated(uint256 indexed shopId, address indexed treasury, bytes32 metadataHash);
     event ShopPaused(uint256 indexed shopId, bool paused);
+    event ShopRoleUpdated(uint256 indexed shopId, address indexed operator, uint8 roles);
 
     error NotOwner();
     error InvalidAddress();
@@ -45,6 +52,7 @@ contract MyShops {
     error NotCommunity();
     error NotShopOwner();
     error ShopNotFound();
+    error InvalidRole();
 
     constructor(
         address registry_,
@@ -120,7 +128,7 @@ contract MyShops {
     function updateShop(uint256 shopId, address treasury, bytes32 metadataHash) external {
         Shop storage shop = shops[shopId];
         if (shop.owner == address(0)) revert ShopNotFound();
-        if (shop.owner != msg.sender) revert NotShopOwner();
+        if (!_isShopOwnerOrRole(shopId, msg.sender, ROLE_SHOP_ADMIN)) revert NotShopOwner();
         if (treasury == address(0)) revert InvalidAddress();
 
         shop.treasury = treasury;
@@ -132,9 +140,30 @@ contract MyShops {
     function setShopPaused(uint256 shopId, bool paused) external {
         Shop storage shop = shops[shopId];
         if (shop.owner == address(0)) revert ShopNotFound();
-        if (shop.owner != msg.sender && msg.sender != owner) revert NotShopOwner();
+        if (msg.sender != owner && !_isShopOwnerOrRole(shopId, msg.sender, ROLE_SHOP_ADMIN)) revert NotShopOwner();
         shop.paused = paused;
         emit ShopPaused(shopId, paused);
     }
-}
 
+    function setShopRoles(uint256 shopId, address operator, uint8 roles) external {
+        Shop storage shop = shops[shopId];
+        if (shop.owner == address(0)) revert ShopNotFound();
+        if (shop.owner != msg.sender) revert NotShopOwner();
+        if (operator == address(0)) revert InvalidAddress();
+        if ((roles & (ROLE_SHOP_ADMIN | ROLE_ITEM_MAINTAINER | ROLE_ITEM_EDITOR | ROLE_ITEM_ACTION_EDITOR)) != roles) {
+            revert InvalidRole();
+        }
+        shopRoles[shopId][operator] = roles;
+        emit ShopRoleUpdated(shopId, operator, roles);
+    }
+
+    function hasShopRole(uint256 shopId, address operator, uint8 role) external view returns (bool) {
+        return _isShopOwnerOrRole(shopId, operator, role);
+    }
+
+    function _isShopOwnerOrRole(uint256 shopId, address operator, uint8 role) internal view returns (bool) {
+        Shop storage shop = shops[shopId];
+        if (shop.owner == operator) return true;
+        return (shopRoles[shopId][operator] & role) != 0;
+    }
+}
