@@ -1,4 +1,6 @@
 import { spawn } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import process from "node:process";
@@ -267,6 +269,15 @@ async function main() {
       request: { to: operatorWallet.account.address, value: 1n * 10n ** 18n }
     });
 
+    const secretsDir = fs.mkdtempSync(path.join(os.tmpdir(), "myshop-smoke-"));
+    started.push(async () => {
+      fs.rmSync(secretsDir, { recursive: true, force: true });
+    });
+    const serialKeyPath = path.join(secretsDir, "serial.key");
+    const riskKeyPath = path.join(secretsDir, "risk.key");
+    fs.writeFileSync(serialKeyPath, serialSignerPk, "utf8");
+    fs.writeFileSync(riskKeyPath, riskSignerPk, "utf8");
+
     const worker = spawn("node", ["src/index.js"], {
       cwd: workerDir,
       env: {
@@ -280,8 +291,10 @@ async function main() {
         API_PORT: String(apiPort),
         POLL_INTERVAL_MS: "200",
         LOOKBACK_BLOCKS: "50",
-        SERIAL_SIGNER_PRIVATE_KEY: serialSignerPk,
-        RISK_SIGNER_PRIVATE_KEY: riskSignerPk,
+        SERIAL_SIGNER_PRIVATE_KEY: "",
+        SERIAL_SIGNER_PRIVATE_KEY_FILE: serialKeyPath,
+        RISK_SIGNER_PRIVATE_KEY: "",
+        RISK_SIGNER_PRIVATE_KEY_FILE: riskKeyPath,
         PERMIT_RATE_LIMIT_MAX: "10",
         PERMIT_RATE_LIMIT_WINDOW_MS: "60000"
       },
@@ -583,6 +596,21 @@ async function main() {
       mustContain(permitMetrics.text, "myshop_permit_rate_limited_total", "permit metrics");
       mustContain(permitMetrics.text, "myshop_permit_http_error_total", "permit metrics");
       mustContain(permitMetrics.text, "myshop_permit_internal_error_total", "permit metrics");
+    }
+
+    {
+      const indexer = await fetchJson(`http://127.0.0.1:${apiPort}/indexer`);
+      assert(indexer?.ok === true, "api /indexer ok");
+      assert(Number(indexer?.reorgLookbackBlocks) === 5, "indexer reorgLookbackBlocks mismatch");
+      assert(Number(indexer?.dedupeWindowBlocks) === 2048, "indexer dedupeWindowBlocks mismatch");
+      assert(indexer?.lastBackoffMs === null || typeof indexer?.lastBackoffMs === "number", "indexer lastBackoffMs type");
+      assert(indexer?.lastBackoffAtMs === null || typeof indexer?.lastBackoffAtMs === "number", "indexer lastBackoffAtMs type");
+
+      const apiMetrics = await fetchRaw(`http://127.0.0.1:${apiPort}/metrics`);
+      assert(apiMetrics.ok === true, "api /metrics ok");
+      mustContain(apiMetrics.text, "myshop_indexer_reorg_lookback_blocks 5", "api metrics");
+      mustContain(apiMetrics.text, "myshop_indexer_dedupe_window_blocks 2048", "api metrics");
+      mustContain(apiMetrics.text, "myshop_indexer_persist_enabled 1", "api metrics");
     }
 
     const risk = await fetchJson(
