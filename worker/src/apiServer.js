@@ -42,6 +42,14 @@ export async function startApiServer({ rpcUrl, chain, itemsAddress, port }) {
     lastErrorAtMs: null,
     lastError: null,
     consecutiveErrors: 0,
+    totalPolls: 0,
+    totalErrors: 0,
+    recoveredFromErrorCount: 0,
+    lastRangeFromBlock: null,
+    lastRangeToBlock: null,
+    lastLogsCount: null,
+    totalLogFetches: 0,
+    totalLogs: 0,
     purchases: [],
     purchaseKeys: new Set(),
     running: false,
@@ -128,6 +136,14 @@ export async function startApiServer({ rpcUrl, chain, itemsAddress, port }) {
           lastErrorAtMs: indexer.lastErrorAtMs,
           lastError: indexer.lastError,
           consecutiveErrors: indexer.consecutiveErrors,
+          totalPolls: indexer.totalPolls,
+          totalErrors: indexer.totalErrors,
+          recoveredFromErrorCount: indexer.recoveredFromErrorCount,
+          lastRangeFromBlock: indexer.lastRangeFromBlock?.toString() ?? null,
+          lastRangeToBlock: indexer.lastRangeToBlock?.toString() ?? null,
+          lastLogsCount: indexer.lastLogsCount,
+          totalLogFetches: indexer.totalLogFetches,
+          totalLogs: indexer.totalLogs,
           cachedPurchases: indexer.purchases.length,
           persist: {
             enabled: indexer.persist.enabled,
@@ -153,6 +169,14 @@ export async function startApiServer({ rpcUrl, chain, itemsAddress, port }) {
         if (lag != null) lines.push(`myshop_indexer_lag_blocks ${lag.toString()}`);
         lines.push(`myshop_indexer_cached_purchases ${indexer.purchases.length}`);
         lines.push(`myshop_indexer_consecutive_errors ${indexer.consecutiveErrors}`);
+        lines.push(`myshop_indexer_total_polls ${indexer.totalPolls}`);
+        lines.push(`myshop_indexer_total_errors ${indexer.totalErrors}`);
+        lines.push(`myshop_indexer_recovered_from_error_count ${indexer.recoveredFromErrorCount}`);
+        lines.push(`myshop_indexer_total_log_fetches ${indexer.totalLogFetches}`);
+        lines.push(`myshop_indexer_total_logs ${indexer.totalLogs}`);
+        if (indexer.lastLogsCount != null) lines.push(`myshop_indexer_last_logs_count ${indexer.lastLogsCount}`);
+        if (indexer.lastRangeFromBlock != null) lines.push(`myshop_indexer_last_range_from_block ${indexer.lastRangeFromBlock.toString()}`);
+        if (indexer.lastRangeToBlock != null) lines.push(`myshop_indexer_last_range_to_block ${indexer.lastRangeToBlock.toString()}`);
         lines.push(`myshop_indexer_persist_enabled ${indexer.persist.enabled ? 1 : 0}`);
         lines.push(`myshop_indexer_persist_errors ${indexer.persist.errors}`);
         if (indexer.persist.lastSavedAtMs != null) lines.push(`myshop_indexer_persist_last_saved_at_ms ${indexer.persist.lastSavedAtMs}`);
@@ -623,6 +647,7 @@ async function _startIndexer({ client, chainId, itemsAddress, cache, indexer }) 
   }
 
   while (!indexer.stop) {
+    indexer.totalPolls += 1;
     indexer.lastPollAtMs = Date.now();
 
     let tip;
@@ -638,7 +663,18 @@ async function _startIndexer({ client, chainId, itemsAddress, cache, indexer }) 
     const fromBlock = indexer.lastIndexedBlock + 1n;
     const toBlock = tip;
 
+    if (fromBlock > toBlock) {
+      if (indexer.consecutiveErrors > 0) indexer.recoveredFromErrorCount += 1;
+      indexer.lastSuccessAtMs = Date.now();
+      indexer.consecutiveErrors = 0;
+      await new Promise((r) => setTimeout(r, indexer.pollIntervalMs));
+      continue;
+    }
+
     if (fromBlock <= toBlock) {
+      indexer.lastRangeFromBlock = fromBlock;
+      indexer.lastRangeToBlock = toBlock;
+      indexer.totalLogFetches += 1;
       let logs;
       try {
         logs = await client.getLogs({
@@ -653,6 +689,8 @@ async function _startIndexer({ client, chainId, itemsAddress, cache, indexer }) 
         continue;
       }
 
+      indexer.lastLogsCount = logs.length;
+      indexer.totalLogs += logs.length;
       for (const log of logs) {
         const key = `${log.transactionHash}:${log.logIndex}`;
         if (indexer.purchaseKeys.has(key)) continue;
@@ -669,6 +707,7 @@ async function _startIndexer({ client, chainId, itemsAddress, cache, indexer }) 
 
       indexer.lastIndexedBlock = toBlock;
       _schedulePersistIndexerState({ indexer, chainId, itemsAddress });
+      if (indexer.consecutiveErrors > 0) indexer.recoveredFromErrorCount += 1;
       indexer.lastSuccessAtMs = Date.now();
       indexer.consecutiveErrors = 0;
     }
@@ -680,6 +719,7 @@ async function _startIndexer({ client, chainId, itemsAddress, cache, indexer }) 
 }
 
 function _markIndexerError(indexer, e) {
+  indexer.totalErrors += 1;
   indexer.consecutiveErrors += 1;
   indexer.lastErrorAtMs = Date.now();
   indexer.lastError = e instanceof Error ? e.message : String(e);

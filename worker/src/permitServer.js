@@ -62,6 +62,17 @@ export async function startPermitServer({
     buckets: new Map()
   };
 
+  const stats = {
+    requestsTotal: 0,
+    okTotal: 0,
+    okSerialPermitTotal: 0,
+    okRiskAllowanceTotal: 0,
+    rateLimitedTotal: 0,
+    httpErrorTotal: 0,
+    internalErrorTotal: 0,
+    errorCodeCounts: new Map()
+  };
+
   const server = http.createServer(async (req, res) => {
     try {
       if (req.method === "OPTIONS") {
@@ -75,14 +86,17 @@ export async function startPermitServer({
       }
 
       const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+      stats.requestsTotal += 1;
 
       if (url.pathname === "/health") {
+        stats.okTotal += 1;
         _json(res, 200, { ok: true });
         return;
       }
 
       if (url.pathname === "/config") {
         _requireMethod(req, ["GET"]);
+        stats.okTotal += 1;
         _json(res, 200, {
           ok: true,
           chainId: chain.id,
@@ -95,6 +109,33 @@ export async function startPermitServer({
             max: limiter.max
           }
         });
+        return;
+      }
+
+      if (url.pathname === "/metrics") {
+        _requireMethod(req, ["GET"]);
+        const lines = [];
+        lines.push(`myshop_permit_requests_total ${stats.requestsTotal}`);
+        lines.push(`myshop_permit_ok_total ${stats.okTotal}`);
+        lines.push(`myshop_permit_ok_serial_permit_total ${stats.okSerialPermitTotal}`);
+        lines.push(`myshop_permit_ok_risk_allowance_total ${stats.okRiskAllowanceTotal}`);
+        lines.push(`myshop_permit_rate_limited_total ${stats.rateLimitedTotal}`);
+        lines.push(`myshop_permit_http_error_total ${stats.httpErrorTotal}`);
+        lines.push(`myshop_permit_internal_error_total ${stats.internalErrorTotal}`);
+        lines.push(`myshop_permit_rate_limit_enabled ${limiter.enabled ? 1 : 0}`);
+        lines.push(`myshop_permit_rate_limit_window_ms ${limiter.windowMs}`);
+        lines.push(`myshop_permit_rate_limit_max ${limiter.max}`);
+        lines.push(`myshop_permit_rate_limit_bucket_count ${limiter.buckets.size}`);
+
+        const codes = Array.from(stats.errorCodeCounts.keys()).sort();
+        for (const code of codes) {
+          const count = stats.errorCodeCounts.get(code) ?? 0;
+          const safeCode = String(code).replace(/[^a-zA-Z0-9_]/g, "_");
+          lines.push(`myshop_permit_error_code_${safeCode}_total ${count}`);
+        }
+
+        stats.okTotal += 1;
+        _text(res, 200, `${lines.join("\n")}\n`);
         return;
       }
 
@@ -155,6 +196,8 @@ export async function startPermitServer({
           signature,
           extraData
         });
+        stats.okTotal += 1;
+        stats.okSerialPermitTotal += 1;
         return;
       }
 
@@ -194,16 +237,21 @@ export async function startPermitServer({
           nonce: nonce.toString(),
           signature
         });
+        stats.okTotal += 1;
+        stats.okRiskAllowanceTotal += 1;
         return;
       }
 
       _json(res, 404, { ok: false, error: "not_found" });
     } catch (e) {
       if (e instanceof RateLimitError) {
+        stats.rateLimitedTotal += 1;
         _json(res, 429, { ok: false, error: "rate_limited", errorCode: "rate_limited" });
         return;
       }
       if (e instanceof HttpError) {
+        stats.httpErrorTotal += 1;
+        stats.errorCodeCounts.set(e.code, (stats.errorCodeCounts.get(e.code) ?? 0) + 1);
         _json(res, e.status, {
           ok: false,
           error: e.message,
@@ -212,6 +260,8 @@ export async function startPermitServer({
         });
         return;
       }
+      stats.internalErrorTotal += 1;
+      stats.errorCodeCounts.set("internal_error", (stats.errorCodeCounts.get("internal_error") ?? 0) + 1);
       _json(res, 500, { ok: false, error: e instanceof Error ? e.message : String(e), errorCode: "internal_error" });
     }
   });
@@ -244,6 +294,16 @@ function _json(res, status, obj) {
     "access-control-allow-headers": "content-type"
   });
   res.end(JSON.stringify(obj));
+}
+
+function _text(res, status, body) {
+  res.writeHead(status, {
+    "content-type": "text/plain; charset=utf-8",
+    "access-control-allow-origin": "*",
+    "access-control-allow-methods": "GET,POST,OPTIONS",
+    "access-control-allow-headers": "content-type"
+  });
+  res.end(body);
 }
 
 function _requireMethod(req, allowed) {
