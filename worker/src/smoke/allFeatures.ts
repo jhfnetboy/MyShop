@@ -107,6 +107,16 @@ async function fetchJson(url: string) {
   return JSON.parse(text);
 }
 
+async function fetchRaw(url: string) {
+  const res = await fetch(url);
+  const text = await res.text();
+  return { status: res.status, ok: res.ok, text };
+}
+
+function mustContain(haystack: string, needle: string, label: string) {
+  assert(haystack.includes(needle), `${label} missing: ${needle}`);
+}
+
 async function writeAndWait(params: {
   walletClient: any;
   publicClient: any;
@@ -155,9 +165,9 @@ async function main() {
 
   const operatorPk = serialSignerPk;
 
-  const rpcPort = await findFreePort(Number(process.env.ANVIL_PORT ?? "8545"));
-  const permitPort = await findFreePort(Number(process.env.WORKER_PORT ?? "8787"));
-  const apiPort = await findFreePort(Number(process.env.API_PORT ?? "8788"));
+  const rpcPort = await findFreePort(Number(process.env.ANVIL_PORT ?? "18545"));
+  const permitPort = await findFreePort(Number(process.env.WORKER_PORT ?? "18787"));
+  const apiPort = await findFreePort(Math.max(Number(process.env.API_PORT ?? "18788"), permitPort + 1));
 
   const rpcUrl = `http://127.0.0.1:${rpcPort}`;
 
@@ -271,7 +281,9 @@ async function main() {
         POLL_INTERVAL_MS: "200",
         LOOKBACK_BLOCKS: "50",
         SERIAL_SIGNER_PRIVATE_KEY: serialSignerPk,
-        RISK_SIGNER_PRIVATE_KEY: riskSignerPk
+        RISK_SIGNER_PRIVATE_KEY: riskSignerPk,
+        PERMIT_RATE_LIMIT_MAX: "10",
+        PERMIT_RATE_LIMIT_WINDOW_MS: "60000"
       },
       stdio: ["ignore", "pipe", "pipe"]
     });
@@ -558,6 +570,21 @@ async function main() {
     }
 
     const deadline = BigInt(Math.floor(Date.now() / 1000) + 3600);
+    {
+      const permitCfg = await fetchJson(`http://127.0.0.1:${permitPort}/config`);
+      assert(permitCfg?.ok === true, "permit /config ok");
+      assert(permitCfg?.serialSignerConfigured === true, "permit serial signer not configured");
+      assert(permitCfg?.riskSignerConfigured === true, "permit risk signer not configured");
+      assert(Number(permitCfg?.rateLimit?.max) === 10, "permit rateLimit.max mismatch");
+
+      const permitMetrics = await fetchRaw(`http://127.0.0.1:${permitPort}/metrics`);
+      assert(permitMetrics.ok === true, "permit /metrics ok");
+      mustContain(permitMetrics.text, "myshop_permit_requests_total", "permit metrics");
+      mustContain(permitMetrics.text, "myshop_permit_rate_limited_total", "permit metrics");
+      mustContain(permitMetrics.text, "myshop_permit_http_error_total", "permit metrics");
+      mustContain(permitMetrics.text, "myshop_permit_internal_error_total", "permit metrics");
+    }
+
     const risk = await fetchJson(
       `http://127.0.0.1:${permitPort}/risk-allowance?shopOwner=${deployer}&maxItems=${(defaultLimit + 3n).toString()}&deadline=${deadline.toString()}`
     );
@@ -609,6 +636,43 @@ async function main() {
       const permit = await fetchJson(
         `http://127.0.0.1:${permitPort}/serial-permit?itemId=${itemId.toString()}&buyer=${buyer}&serial=SERIAL-TS-001&deadline=${deadline.toString()}`
       );
+      {
+        const expired = await fetchRaw(
+          `http://127.0.0.1:${permitPort}/serial-permit?itemId=${itemId.toString()}&buyer=${buyer}&serial=SERIAL-TS-EXPIRED&deadline=${(
+            BigInt(Math.floor(Date.now() / 1000) - 1)
+          ).toString()}`
+        );
+        assert(expired.status === 400, `expected 400 for expired deadline, got ${expired.status}`);
+        const j = JSON.parse(expired.text);
+        assert(j?.ok === false, "expired response ok should be false");
+        assert(j?.errorCode === "deadline_expired", `expected deadline_expired, got ${j?.errorCode}`);
+      }
+      {
+        const invalid = await fetchRaw(
+          `http://127.0.0.1:${permitPort}/serial-permit?itemId=${itemId.toString()}&buyer=${buyer}&serial=SERIAL-TS-INVALID&deadline=${deadline.toString()}&serialHash=0x1234`
+        );
+        assert(invalid.status === 400, `expected 400 for invalid param, got ${invalid.status}`);
+        const j = JSON.parse(invalid.text);
+        assert(j?.ok === false, "invalid response ok should be false");
+        assert(j?.errorCode === "invalid_param", `expected invalid_param, got ${j?.errorCode}`);
+      }
+
+      {
+        let got429 = false;
+        for (let i = 0; i < 20; i++) {
+          const r = await fetchRaw(
+            `http://127.0.0.1:${permitPort}/serial-permit?itemId=${itemId.toString()}&buyer=${buyer}&serial=SERIAL-TS-RL-${i}&deadline=${deadline.toString()}`
+          );
+          if (r.status === 429) {
+            const j = JSON.parse(r.text);
+            assert(j?.ok === false, "rate limited response ok should be false");
+            assert(j?.errorCode === "rate_limited", `expected errorCode rate_limited, got ${j?.errorCode}`);
+            got429 = true;
+            break;
+          }
+        }
+        assert(got429, "expected to hit permit rate limit");
+      }
       await writeAndWait({
         walletClient: buyerWallet,
         publicClient: publicClient2,
@@ -642,6 +706,14 @@ async function main() {
 
     const cfg = await fetchJson(`http://127.0.0.1:${apiPort}/config`);
     assert(cfg.itemsAddress === itemsAddress, "api config itemsAddress mismatch");
+
+    {
+      const apiMetrics = await fetchRaw(`http://127.0.0.1:${apiPort}/metrics`);
+      assert(apiMetrics.ok === true, "api /metrics ok");
+      mustContain(apiMetrics.text, "myshop_indexer_last_indexed_block", "api metrics");
+      mustContain(apiMetrics.text, "myshop_indexer_lag_blocks", "api metrics");
+      mustContain(apiMetrics.text, "myshop_indexer_consecutive_errors", "api metrics");
+    }
 
     const shops = await fetchJson(`http://127.0.0.1:${apiPort}/shops?limit=1`);
     assert(shops.ok === true, "shops ok");
