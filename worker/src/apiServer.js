@@ -33,12 +33,20 @@ export async function startApiServer({ rpcUrl, chain, itemsAddress, port }) {
     enabled: process.env.ENABLE_INDEXER == null ? true : process.env.ENABLE_INDEXER === "1",
     pollIntervalMs: Number(process.env.INDEXER_POLL_INTERVAL_MS ?? "1000"),
     lookbackBlocks: BigInt(process.env.INDEXER_LOOKBACK_BLOCKS ?? "5000"),
+    replayLookbackBlocks: BigInt(process.env.INDEXER_REPLAY_LOOKBACK_BLOCKS ?? "50"),
     maxRecords: Number(process.env.INDEXER_MAX_RECORDS ?? "5000"),
     lastIndexedBlock: null,
+    lastTipBlock: null,
+    lastPollAtMs: null,
+    lastSuccessAtMs: null,
+    lastErrorAtMs: null,
+    lastError: null,
+    consecutiveErrors: 0,
     purchases: [],
     purchaseKeys: new Set(),
     running: false,
     stop: false,
+    replayedOnStart: false,
     persist: {
       enabled: process.env.INDEXER_PERSIST === "1" || process.env.INDEXER_PERSIST_PATH != null,
       path: process.env.INDEXER_PERSIST_PATH ?? null,
@@ -100,14 +108,26 @@ export async function startApiServer({ rpcUrl, chain, itemsAddress, port }) {
       }
 
       if (url.pathname === "/indexer") {
+        const lagBlocks =
+          indexer.lastTipBlock != null && indexer.lastIndexedBlock != null
+            ? (indexer.lastTipBlock - indexer.lastIndexedBlock).toString()
+            : null;
         return _json(res, 200, {
           ok: true,
           enabled: indexer.enabled,
           running: indexer.running,
           pollIntervalMs: indexer.pollIntervalMs,
           lookbackBlocks: indexer.lookbackBlocks.toString(),
+          replayLookbackBlocks: indexer.replayLookbackBlocks.toString(),
           maxRecords: indexer.maxRecords,
           lastIndexedBlock: indexer.lastIndexedBlock?.toString() ?? null,
+          lastTipBlock: indexer.lastTipBlock?.toString() ?? null,
+          lagBlocks,
+          lastPollAtMs: indexer.lastPollAtMs,
+          lastSuccessAtMs: indexer.lastSuccessAtMs,
+          lastErrorAtMs: indexer.lastErrorAtMs,
+          lastError: indexer.lastError,
+          consecutiveErrors: indexer.consecutiveErrors,
           cachedPurchases: indexer.purchases.length,
           persist: {
             enabled: indexer.persist.enabled,
@@ -564,18 +584,42 @@ async function _startIndexer({ client, chainId, itemsAddress, cache, indexer }) 
     indexer.lastIndexedBlock = startFrom > 0n ? startFrom - 1n : 0n;
   }
 
+  if (!indexer.replayedOnStart && indexer.persist.enabled && indexer.replayLookbackBlocks > 0n) {
+    const rewind = indexer.lastIndexedBlock > indexer.replayLookbackBlocks ? indexer.replayLookbackBlocks : indexer.lastIndexedBlock;
+    indexer.lastIndexedBlock = indexer.lastIndexedBlock - rewind;
+    indexer.replayedOnStart = true;
+  }
+
   while (!indexer.stop) {
-    const tip = await client.getBlockNumber();
+    indexer.lastPollAtMs = Date.now();
+
+    let tip;
+    try {
+      tip = await client.getBlockNumber();
+    } catch (e) {
+      _markIndexerError(indexer, e);
+      await new Promise((r) => setTimeout(r, _backoffMs(indexer)));
+      continue;
+    }
+
+    indexer.lastTipBlock = tip;
     const fromBlock = indexer.lastIndexedBlock + 1n;
     const toBlock = tip;
 
     if (fromBlock <= toBlock) {
-      const logs = await client.getLogs({
-        address: itemsAddress,
-        event: purchasedEvent,
-        fromBlock,
-        toBlock
-      });
+      let logs;
+      try {
+        logs = await client.getLogs({
+          address: itemsAddress,
+          event: purchasedEvent,
+          fromBlock,
+          toBlock
+        });
+      } catch (e) {
+        _markIndexerError(indexer, e);
+        await new Promise((r) => setTimeout(r, _backoffMs(indexer)));
+        continue;
+      }
 
       for (const log of logs) {
         const key = `${log.transactionHash}:${log.logIndex}`;
@@ -593,10 +637,26 @@ async function _startIndexer({ client, chainId, itemsAddress, cache, indexer }) 
 
       indexer.lastIndexedBlock = toBlock;
       _schedulePersistIndexerState({ indexer, chainId, itemsAddress });
+      indexer.lastSuccessAtMs = Date.now();
+      indexer.consecutiveErrors = 0;
     }
 
     await new Promise((r) => setTimeout(r, indexer.pollIntervalMs));
   }
 
   indexer.running = false;
+}
+
+function _markIndexerError(indexer, e) {
+  indexer.consecutiveErrors += 1;
+  indexer.lastErrorAtMs = Date.now();
+  indexer.lastError = e instanceof Error ? e.message : String(e);
+}
+
+function _backoffMs(indexer) {
+  const max = Number(process.env.INDEXER_BACKOFF_MAX_MS ?? "15000");
+  const base = Math.max(100, Number(indexer.pollIntervalMs));
+  const pow = Math.min(6, Math.max(0, Number(indexer.consecutiveErrors)));
+  const ms = base * Math.pow(2, pow);
+  return Math.min(max, Math.max(base, Math.floor(ms)));
 }

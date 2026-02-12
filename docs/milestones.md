@@ -41,8 +41,9 @@
 - B1：实现 purchases 持久化（本地 sqlite/kv 任选其一），并支持重启恢复
   - 状态：已开始（Worker /indexer 已暴露 persist 状态）
 - B2：实现 indexer 的重放/去重策略规范化（lookback、key 规则、最大缓存上限）
+  - 状态：已开始（重启会按 replayLookbackBlocks 回放并用 txHash:logIndex 去重）
 - B3：增加 /metrics 或扩展 /indexer 输出（错误计数、最近一次错误、重连状态）
-  - 状态：已开始（先扩展 /indexer；后续补齐错误细节与重连状态）
+  - 状态：已开始（/indexer 已输出 lastError/lastErrorAtMs/lagBlocks 等；后续补齐重连细节）
 - B4：Permit API 限流与滥用防护（最小可行：按 IP/路径的滑动窗口）
   - 状态：已开始（Permit Server 增加 429 rate_limited；可通过 env 调整阈值）
 - B5：签名密钥治理文档（托管/轮换/隔离资金权限/审计流程）
