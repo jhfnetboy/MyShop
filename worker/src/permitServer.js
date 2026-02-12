@@ -14,6 +14,16 @@ class RateLimitError extends Error {
   }
 }
 
+class HttpError extends Error {
+  constructor({ status, code, message, details }) {
+    super(message);
+    this.name = "HttpError";
+    this.status = status;
+    this.code = code;
+    this.details = details ?? null;
+  }
+}
+
 export async function startPermitServer({
   rpcUrl,
   chain,
@@ -71,15 +81,39 @@ export async function startPermitServer({
         return;
       }
 
+      if (url.pathname === "/config") {
+        _requireMethod(req, ["GET"]);
+        _json(res, 200, {
+          ok: true,
+          chainId: chain.id,
+          itemsAddress: getAddress(itemsAddress),
+          serialSignerConfigured: walletClients.serial != null,
+          riskSignerConfigured: walletClients.risk != null,
+          rateLimit: {
+            enabled: limiter.enabled,
+            windowMs: limiter.windowMs,
+            max: limiter.max
+          }
+        });
+        return;
+      }
+
       if (limiter.enabled && (url.pathname === "/serial-permit" || url.pathname === "/risk-allowance")) {
         _rateLimitOrThrow({ req, url, limiter });
       }
 
       if (url.pathname === "/serial-permit") {
-        if (!walletClients.serial) throw new Error("SERIAL_SIGNER_PRIVATE_KEY not set");
-        const buyer = getAddress(_get(url, "buyer"));
-        const itemId = BigInt(_get(url, "itemId"));
-        const deadline = BigInt(_get(url, "deadline"));
+        _requireMethod(req, ["GET"]);
+        if (!walletClients.serial) {
+          throw new HttpError({
+            status: 500,
+            code: "signer_not_configured",
+            message: "SERIAL_SIGNER_PRIVATE_KEY not set"
+          });
+        }
+        const buyer = _getAddressParam(url, "buyer");
+        const itemId = _getUintParam(url, "itemId", { min: 1n });
+        const deadline = _getDeadlineParam(url, "deadline");
         const nonce = await _resolveNonce(publicClient, itemsAddress, buyer, url.searchParams.get("nonce"));
 
         const serialResult = await _resolveSerialHash({
@@ -125,10 +159,17 @@ export async function startPermitServer({
       }
 
       if (url.pathname === "/risk-allowance") {
-        if (!walletClients.risk) throw new Error("RISK_SIGNER_PRIVATE_KEY not set");
-        const shopOwner = getAddress(_get(url, "shopOwner"));
-        const maxItems = BigInt(_get(url, "maxItems"));
-        const deadline = BigInt(_get(url, "deadline"));
+        _requireMethod(req, ["GET"]);
+        if (!walletClients.risk) {
+          throw new HttpError({
+            status: 500,
+            code: "signer_not_configured",
+            message: "RISK_SIGNER_PRIVATE_KEY not set"
+          });
+        }
+        const shopOwner = _getAddressParam(url, "shopOwner");
+        const maxItems = _getUintParam(url, "maxItems", { min: 1n });
+        const deadline = _getDeadlineParam(url, "deadline");
         const nonce = await _resolveNonce(publicClient, itemsAddress, shopOwner, url.searchParams.get("nonce"));
 
         const signature = await walletClients.risk.signTypedData({
@@ -159,10 +200,19 @@ export async function startPermitServer({
       _json(res, 404, { ok: false, error: "not_found" });
     } catch (e) {
       if (e instanceof RateLimitError) {
-        _json(res, 429, { ok: false, error: "rate_limited" });
+        _json(res, 429, { ok: false, error: "rate_limited", errorCode: "rate_limited" });
         return;
       }
-      _json(res, 400, { ok: false, error: e instanceof Error ? e.message : String(e) });
+      if (e instanceof HttpError) {
+        _json(res, e.status, {
+          ok: false,
+          error: e.message,
+          errorCode: e.code,
+          errorDetails: e.details
+        });
+        return;
+      }
+      _json(res, 500, { ok: false, error: e instanceof Error ? e.message : String(e), errorCode: "internal_error" });
     }
   });
 
@@ -175,7 +225,14 @@ export async function startPermitServer({
 
 function _get(url, key) {
   const value = url.searchParams.get(key);
-  if (!value) throw new Error(`Missing query param: ${key}`);
+  if (!value) {
+    throw new HttpError({
+      status: 400,
+      code: "missing_param",
+      message: `Missing query param: ${key}`,
+      details: { param: key }
+    });
+  }
   return value;
 }
 
@@ -187,6 +244,75 @@ function _json(res, status, obj) {
     "access-control-allow-headers": "content-type"
   });
   res.end(JSON.stringify(obj));
+}
+
+function _requireMethod(req, allowed) {
+  const method = req.method ?? "GET";
+  if (allowed.includes(method)) return;
+  throw new HttpError({
+    status: 405,
+    code: "method_not_allowed",
+    message: "Method not allowed",
+    details: { method, allowed }
+  });
+}
+
+function _getAddressParam(url, key) {
+  const raw = _get(url, key);
+  try {
+    return getAddress(raw);
+  } catch {
+    throw new HttpError({
+      status: 400,
+      code: "invalid_param",
+      message: `Invalid address param: ${key}`,
+      details: { param: key, value: raw }
+    });
+  }
+}
+
+function _getUintParam(url, key, { min, max } = {}) {
+  const raw = _get(url, key);
+  if (!/^\d+$/.test(raw)) {
+    throw new HttpError({
+      status: 400,
+      code: "invalid_param",
+      message: `Invalid uint param: ${key}`,
+      details: { param: key, value: raw }
+    });
+  }
+  const value = BigInt(raw);
+  if (min != null && value < min) {
+    throw new HttpError({
+      status: 400,
+      code: "invalid_param",
+      message: `Param out of range: ${key}`,
+      details: { param: key, value: raw, min: min.toString() }
+    });
+  }
+  if (max != null && value > max) {
+    throw new HttpError({
+      status: 400,
+      code: "invalid_param",
+      message: `Param out of range: ${key}`,
+      details: { param: key, value: raw, max: max.toString() }
+    });
+  }
+  return value;
+}
+
+function _getDeadlineParam(url, key) {
+  const deadline = _getUintParam(url, key, { min: 1n });
+  const nowSec = BigInt(Math.floor(Date.now() / 1000));
+  if (deadline <= nowSec) {
+    throw new HttpError({
+      status: 400,
+      code: "deadline_expired",
+      message: "deadline must be in the future",
+      details: { param: key, nowSec: nowSec.toString(), deadline: deadline.toString() }
+    });
+  }
+  return deadline;
 }
 
 function _getClientIp(req) {
@@ -212,7 +338,27 @@ function _rateLimitOrThrow({ req, url, limiter }) {
 }
 
 async function _resolveNonce(publicClient, itemsAddress, user, nonceParam) {
-  if (nonceParam != null && nonceParam !== "") return BigInt(nonceParam);
+  if (nonceParam != null && nonceParam !== "") {
+    if (!/^\d+$/.test(nonceParam)) {
+      throw new HttpError({
+        status: 400,
+        code: "invalid_param",
+        message: "Invalid uint param: nonce",
+        details: { param: "nonce", value: nonceParam }
+      });
+    }
+    const nonce = BigInt(nonceParam);
+    const maxNonce = BigInt(process.env.PERMIT_MAX_NONCE ?? "1000000");
+    if (nonce > maxNonce) {
+      throw new HttpError({
+        status: 400,
+        code: "invalid_param",
+        message: "Param out of range: nonce",
+        details: { param: "nonce", value: nonceParam, max: maxNonce.toString() }
+      });
+    }
+    return nonce;
+  }
   for (let i = 0n; i < 1000n; i++) {
     const used = await publicClient.readContract({
       address: getAddress(itemsAddress),
@@ -227,33 +373,97 @@ async function _resolveNonce(publicClient, itemsAddress, user, nonceParam) {
 
 async function _resolveSerialHash({ url, serialIssuerUrl, buyer, itemId }) {
   const serialHashParam = url.searchParams.get("serialHash");
-  if (serialHashParam) return { serial: null, serialHash: serialHashParam };
+  if (serialHashParam) {
+    if (!/^0x[0-9a-fA-F]{64}$/.test(serialHashParam)) {
+      throw new HttpError({
+        status: 400,
+        code: "invalid_param",
+        message: "Invalid bytes32 param: serialHash",
+        details: { param: "serialHash", value: serialHashParam }
+      });
+    }
+    return { serial: null, serialHash: serialHashParam };
+  }
 
   const serialParam = url.searchParams.get("serial");
-  if (serialParam) return { serial: serialParam, serialHash: keccak256(toBytes(serialParam)) };
+  if (serialParam) {
+    const maxLen = Number(process.env.PERMIT_MAX_SERIAL_LENGTH ?? "128");
+    if (serialParam.length < 1 || serialParam.length > maxLen) {
+      throw new HttpError({
+        status: 400,
+        code: "invalid_param",
+        message: "Param out of range: serial",
+        details: { param: "serial", minLength: 1, maxLength: maxLen }
+      });
+    }
+    return { serial: serialParam, serialHash: keccak256(toBytes(serialParam)) };
+  }
 
-  if (!serialIssuerUrl) throw new Error("Missing query param: serial (or set SERIAL_ISSUER_URL)");
+  if (!serialIssuerUrl) {
+    throw new HttpError({
+      status: 400,
+      code: "missing_param",
+      message: "Missing query param: serial (or set SERIAL_ISSUER_URL)",
+      details: { param: "serial" }
+    });
+  }
+
+  const context = url.searchParams.get("context");
+  const maxContextLen = Number(process.env.PERMIT_MAX_CONTEXT_LENGTH ?? "256");
+  if (context != null && context.length > maxContextLen) {
+    throw new HttpError({
+      status: 400,
+      code: "invalid_param",
+      message: "Param out of range: context",
+      details: { param: "context", maxLength: maxContextLen }
+    });
+  }
 
   const issued = await _issueSerial(serialIssuerUrl, {
     buyer,
     itemId: itemId.toString(),
-    context: url.searchParams.get("context")
+    context
   });
 
   if (issued.serialHash) return { serial: issued.serial ?? null, serialHash: issued.serialHash };
   if (issued.serial) return { serial: issued.serial, serialHash: keccak256(toBytes(issued.serial)) };
-  throw new Error("SERIAL_ISSUER_URL response must include serial or serialHash");
+  throw new HttpError({
+    status: 502,
+    code: "serial_issuer_error",
+    message: "SERIAL_ISSUER_URL response must include serial or serialHash"
+  });
 }
 
 async function _issueSerial(serialIssuerUrl, payload) {
-  const res = await fetch(serialIssuerUrl, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(payload)
-  });
+  let res;
+  try {
+    res = await fetch(serialIssuerUrl, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+  } catch (e) {
+    throw new HttpError({
+      status: 502,
+      code: "serial_issuer_error",
+      message: e instanceof Error ? e.message : String(e)
+    });
+  }
 
-  if (!res.ok) throw new Error(`SERIAL_ISSUER_URL error: HTTP ${res.status}`);
+  if (!res.ok) {
+    throw new HttpError({
+      status: 502,
+      code: "serial_issuer_error",
+      message: `SERIAL_ISSUER_URL error: HTTP ${res.status}`
+    });
+  }
   const json = await res.json();
-  if (json == null || typeof json !== "object") throw new Error("SERIAL_ISSUER_URL returned non-object JSON");
+  if (json == null || typeof json !== "object") {
+    throw new HttpError({
+      status: 502,
+      code: "serial_issuer_error",
+      message: "SERIAL_ISSUER_URL returned non-object JSON"
+    });
+  }
   return json;
 }

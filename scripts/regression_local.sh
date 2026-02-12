@@ -195,19 +195,8 @@ PERSISTED_PURCHASES_JSON="$(curl -sS "http://127.0.0.1:${API_PORT}/purchases?fro
 json_assert "purchases after restart (index)" "${PERSISTED_PURCHASES_JSON}" "function(obj,assert){assert(obj.ok===true,'ok=false');assert(Number(obj.count)>=1,'count<1')}"
 
 echo "case B-03: expired deadline (expected failure)"
-set +e
-EXTRA_EXPIRED="$(
-  curl -sS "http://127.0.0.1:${WORKER_PORT}/serial-permit?itemId=${DEMO_ITEM_ID}&buyer=${DEMO_BUYER}&serial=SERIAL-EXPIRED&deadline=1&nonce=123" |
-    node -e "process.stdin.on('data',d=>{const j=JSON.parse(d.toString());process.stdout.write(j.extraData)})"
-)"
-cast send --rpc-url "${RPC_URL}" --private-key "${BUYER_PK}" "${DEMO_ITEMS}" \
-  "buy(uint256,uint256,address,bytes)(uint256)" "${DEMO_ITEM_ID}" 1 "${DEMO_BUYER}" "${EXTRA_EXPIRED}" >/dev/null
-EXPIRED_RC="$?"
-set -e
-if [ "${EXPIRED_RC}" -eq 0 ]; then
-  echo "expected expired deadline buy to fail, but it succeeded" >&2
-  exit 1
-fi
+EXPIRED_JSON="$(curl -sS "http://127.0.0.1:${WORKER_PORT}/serial-permit?itemId=${DEMO_ITEM_ID}&buyer=${DEMO_BUYER}&serial=SERIAL-EXPIRED&deadline=1&nonce=123")"
+json_assert "permit rejects expired deadline" "${EXPIRED_JSON}" "function(obj,assert){assert(obj.ok===false,'ok=true');assert(obj.errorCode==='deadline_expired','errorCode!=deadline_expired')}"
 
 echo "case B-04: nonce replay (first success, second expected failure)"
 DEADLINE2="$(node -e "console.log(Math.floor(Date.now()/1000)+3600)")"

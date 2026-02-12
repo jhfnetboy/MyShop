@@ -43,9 +43,9 @@
 - B2：实现 indexer 的重放/去重策略规范化（lookback、key 规则、最大缓存上限）
   - 状态：已开始（重启会按 replayLookbackBlocks 回放并用 txHash:logIndex 去重）
 - B3：增加 /metrics 或扩展 /indexer 输出（错误计数、最近一次错误、重连状态）
-  - 状态：已开始（/indexer 已输出 lastError/lastErrorAtMs/lagBlocks 等；后续补齐重连细节）
+  - 状态：已开始（/indexer + /metrics 已输出 lagBlocks、lastError、consecutiveErrors 等；后续补齐重连细节）
 - B4：Permit API 限流与滥用防护（最小可行：按 IP/路径的滑动窗口）
-  - 状态：已开始（Permit Server 增加 429 rate_limited；可通过 env 调整阈值）
+  - 状态：已开始（Permit Server 增加 429 rate_limited + 参数校验 errorCode；可通过 env 调整阈值）
 - B5：签名密钥治理文档（托管/轮换/隔离资金权限/审计流程）
 
 ## 3. Milestone C：前端流程打磨（让“入口齐全”变成“体验可用”）

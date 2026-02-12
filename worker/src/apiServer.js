@@ -138,6 +138,28 @@ export async function startApiServer({ rpcUrl, chain, itemsAddress, port }) {
         });
       }
 
+      if (url.pathname === "/metrics") {
+        const enabled = indexer.enabled ? 1 : 0;
+        const running = indexer.running ? 1 : 0;
+        const lastIndexed = indexer.lastIndexedBlock ?? null;
+        const lastTip = indexer.lastTipBlock ?? null;
+        const lag = lastIndexed != null && lastTip != null ? lastTip - lastIndexed : null;
+
+        const lines = [];
+        lines.push(`myshop_indexer_enabled ${enabled}`);
+        lines.push(`myshop_indexer_running ${running}`);
+        if (lastIndexed != null) lines.push(`myshop_indexer_last_indexed_block ${lastIndexed.toString()}`);
+        if (lastTip != null) lines.push(`myshop_indexer_last_tip_block ${lastTip.toString()}`);
+        if (lag != null) lines.push(`myshop_indexer_lag_blocks ${lag.toString()}`);
+        lines.push(`myshop_indexer_cached_purchases ${indexer.purchases.length}`);
+        lines.push(`myshop_indexer_consecutive_errors ${indexer.consecutiveErrors}`);
+        lines.push(`myshop_indexer_persist_enabled ${indexer.persist.enabled ? 1 : 0}`);
+        lines.push(`myshop_indexer_persist_errors ${indexer.persist.errors}`);
+        if (indexer.persist.lastSavedAtMs != null) lines.push(`myshop_indexer_persist_last_saved_at_ms ${indexer.persist.lastSavedAtMs}`);
+
+        return _text(res, 200, `${lines.join("\n")}\n`);
+      }
+
       if (url.pathname === "/shop") {
         const shopId = BigInt(_get(url, "shopId"));
         const shop = await _getShop(client, items, shopId, cache);
@@ -293,6 +315,16 @@ function _json(res, status, obj) {
     "access-control-allow-headers": "content-type"
   });
   res.end(JSON.stringify(obj));
+}
+
+function _text(res, status, body) {
+  res.writeHead(status, {
+    "content-type": "text/plain; charset=utf-8",
+    "access-control-allow-origin": "*",
+    "access-control-allow-methods": "GET,POST,OPTIONS",
+    "access-control-allow-headers": "content-type"
+  });
+  res.end(body);
 }
 
 function _get(url, key) {
