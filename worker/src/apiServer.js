@@ -34,6 +34,7 @@ export async function startApiServer({ rpcUrl, chain, itemsAddress, port }) {
     pollIntervalMs: Number(process.env.INDEXER_POLL_INTERVAL_MS ?? "1000"),
     lookbackBlocks: BigInt(process.env.INDEXER_LOOKBACK_BLOCKS ?? "5000"),
     replayLookbackBlocks: BigInt(process.env.INDEXER_REPLAY_LOOKBACK_BLOCKS ?? "50"),
+    reorgLookbackBlocks: BigInt(process.env.INDEXER_REORG_LOOKBACK_BLOCKS ?? "5"),
     dedupeWindowBlocks: BigInt(process.env.INDEXER_DEDUPE_WINDOW_BLOCKS ?? "2048"),
     maxRecords: Number(process.env.INDEXER_MAX_RECORDS ?? "5000"),
     lastIndexedBlock: null,
@@ -54,6 +55,7 @@ export async function startApiServer({ rpcUrl, chain, itemsAddress, port }) {
     purchases: [],
     purchaseKeys: new Set(),
     droppedOnReplay: 0,
+    droppedOnReorg: 0,
     running: false,
     stop: false,
     replayedOnStart: false,
@@ -129,6 +131,7 @@ export async function startApiServer({ rpcUrl, chain, itemsAddress, port }) {
           pollIntervalMs: indexer.pollIntervalMs,
           lookbackBlocks: indexer.lookbackBlocks.toString(),
           replayLookbackBlocks: indexer.replayLookbackBlocks.toString(),
+          reorgLookbackBlocks: indexer.reorgLookbackBlocks.toString(),
           dedupeWindowBlocks: indexer.dedupeWindowBlocks.toString(),
           maxRecords: indexer.maxRecords,
           lastIndexedBlock: indexer.lastIndexedBlock?.toString() ?? null,
@@ -148,6 +151,7 @@ export async function startApiServer({ rpcUrl, chain, itemsAddress, port }) {
           totalLogFetches: indexer.totalLogFetches,
           totalLogs: indexer.totalLogs,
           droppedOnReplay: indexer.droppedOnReplay,
+          droppedOnReorg: indexer.droppedOnReorg,
           cachedPurchases: indexer.purchases.length,
           persist: {
             enabled: indexer.persist.enabled,
@@ -181,8 +185,10 @@ export async function startApiServer({ rpcUrl, chain, itemsAddress, port }) {
         if (indexer.lastLogsCount != null) lines.push(`myshop_indexer_last_logs_count ${indexer.lastLogsCount}`);
         if (indexer.lastRangeFromBlock != null) lines.push(`myshop_indexer_last_range_from_block ${indexer.lastRangeFromBlock.toString()}`);
         if (indexer.lastRangeToBlock != null) lines.push(`myshop_indexer_last_range_to_block ${indexer.lastRangeToBlock.toString()}`);
+        lines.push(`myshop_indexer_reorg_lookback_blocks ${indexer.reorgLookbackBlocks.toString()}`);
         lines.push(`myshop_indexer_dedupe_window_blocks ${indexer.dedupeWindowBlocks.toString()}`);
         lines.push(`myshop_indexer_dropped_on_replay ${indexer.droppedOnReplay}`);
+        lines.push(`myshop_indexer_dropped_on_reorg ${indexer.droppedOnReorg}`);
         lines.push(`myshop_indexer_persist_enabled ${indexer.persist.enabled ? 1 : 0}`);
         lines.push(`myshop_indexer_persist_errors ${indexer.persist.errors}`);
         if (indexer.persist.lastSavedAtMs != null) lines.push(`myshop_indexer_persist_last_saved_at_ms ${indexer.persist.lastSavedAtMs}`);
@@ -691,7 +697,16 @@ async function _startIndexer({ client, chainId, itemsAddress, cache, indexer }) 
     }
 
     indexer.lastTipBlock = tip;
-    const fromBlock = indexer.lastIndexedBlock + 1n;
+    let fromBlock = indexer.lastIndexedBlock + 1n;
+    if (indexer.reorgLookbackBlocks > 0n && indexer.lastIndexedBlock > 0n) {
+      const rewind =
+        indexer.lastIndexedBlock > indexer.reorgLookbackBlocks ? indexer.reorgLookbackBlocks : indexer.lastIndexedBlock;
+      const reorgFrom = indexer.lastIndexedBlock - rewind + 1n;
+      if (reorgFrom < fromBlock) {
+        fromBlock = reorgFrom;
+        indexer.droppedOnReorg += _dropPurchasesFromBlock(indexer, fromBlock);
+      }
+    }
     const toBlock = tip;
 
     if (fromBlock > toBlock) {
