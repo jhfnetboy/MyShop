@@ -81,6 +81,46 @@ function setText(id, text) {
   document.getElementById(id).textContent = text;
 }
 
+class ApiError extends Error {
+  constructor(message, { status, errorCode, errorDetails, url } = {}) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status ?? null;
+    this.errorCode = errorCode ?? null;
+    this.errorDetails = errorDetails ?? null;
+    this.url = url ?? null;
+  }
+}
+
+function formatError(e) {
+  const msg = e instanceof Error ? e.message : String(e);
+
+  if (e instanceof ApiError) {
+    const code = e.errorCode || "api_error";
+    if (code === "deadline_expired") return `[${code}] deadline must be in the future (pick a later deadline)`;
+    if (code === "missing_param") return `[${code}] missing param: ${e.errorDetails?.param || "unknown"}`;
+    if (code === "invalid_param") return `[${code}] invalid param: ${e.errorDetails?.param || "unknown"}`;
+    if (code === "rate_limited") return `[${code}] too many requests, retry later`;
+    if (code === "signer_not_configured") return `[${code}] permit signer not configured on server`;
+    if (code === "serial_issuer_error") return `[${code}] serial issuer error`;
+    if (code === "method_not_allowed") return `[${code}] method not allowed`;
+    return `[${code}] ${msg}`;
+  }
+
+  if (msg.includes("SignatureExpired")) return "[SignatureExpired] permit signature expired; refetch extraData";
+  if (msg.includes("NonceUsed")) return "[NonceUsed] nonce already used; refetch extraData";
+  if (msg.includes("ShopPaused")) return "[ShopPaused] shop is paused";
+  if (msg.includes("ItemInactive")) return "[ItemInactive] item is inactive";
+  if (msg.toLowerCase().includes("user rejected")) return "[UserRejected] transaction rejected in wallet";
+  if (msg.toLowerCase().includes("insufficient funds")) return "[InsufficientFunds] insufficient ETH for gas";
+
+  return msg;
+}
+
+function showTxError(e) {
+  setText("txOut", formatError(e));
+}
+
 function requireAddress(value, field) {
   if (!isAddress(value)) throw new Error(`Invalid address: ${field}`);
   return getAddress(value);
@@ -120,10 +160,39 @@ function getApiBaseUrl() {
 
 async function fetchJson(url) {
   const res = await fetch(url);
-  const json = await res.json().catch(() => null);
-  if (!res.ok) throw new Error(json?.error ? String(json.error) : `HTTP ${res.status}`);
-  if (json?.error) throw new Error(String(json.error));
-  return json;
+  const body = await res.text();
+  let parsed = null;
+  try {
+    parsed = body ? JSON.parse(body) : null;
+  } catch {
+    parsed = null;
+  }
+
+  if (!res.ok) {
+    const message = parsed?.error ? String(parsed.error) : `HTTP ${res.status}`;
+    throw new ApiError(message, {
+      status: res.status,
+      errorCode: parsed?.errorCode ?? "http_error",
+      errorDetails: parsed?.errorDetails ?? null,
+      url
+    });
+  }
+
+  if (!parsed || typeof parsed !== "object") {
+    throw new ApiError("invalid JSON response", { status: res.status, errorCode: "invalid_response", url });
+  }
+
+  if (parsed?.ok === false || parsed?.error) {
+    const message = parsed?.error ? String(parsed.error) : "request failed";
+    throw new ApiError(message, {
+      status: res.status,
+      errorCode: parsed?.errorCode ?? "api_error",
+      errorDetails: parsed?.errorDetails ?? null,
+      url
+    });
+  }
+
+  return parsed;
 }
 
 async function workerApiGet(path, params = {}) {
@@ -1117,7 +1186,7 @@ async function renderPlaza(container) {
   container.appendChild(el("div", {}, [inputRow("shops limit", "plazaShopLimit", "20"), inputRow("items limit", "plazaItemLimit", "50")]));
 
   const listBox = el("div", { id: "plazaList" });
-  container.appendChild(el("button", { text: "Reload", onclick: () => load().catch((e) => setText("txOut", String(e))) }));
+  container.appendChild(el("button", { text: "Reload", onclick: () => load().catch(showTxError) }));
   container.appendChild(listBox);
 
   async function load() {
@@ -1191,7 +1260,7 @@ async function renderShopDetail(container, shopId) {
   itemsBox.appendChild(
     el("button", {
       text: "Scan",
-      onclick: () => scan().catch((e) => setText("txOut", String(e)))
+      onclick: () => scan().catch(showTxError)
     })
   );
   const list = el("div", { id: "shopItemsList" });
@@ -1242,7 +1311,7 @@ async function renderItemDetail(container, itemId) {
   container.appendChild(
     el("button", {
       text: "Reload Purchases",
-      onclick: () => loadPurchases().catch((e) => setText("txOut", String(e)))
+      onclick: () => loadPurchases().catch(showTxError)
     })
   );
   container.appendChild(purchasesOut);
@@ -1273,7 +1342,7 @@ async function renderBuyer(container) {
     el("div", {}, [
       el("h3", { text: "Read Item" }),
       inputRow("itemId", "itemIdRead", routeState.buyerItemId || "1"),
-      el("button", { text: "Read Item", onclick: () => readItem().catch((e) => setText("txOut", String(e))) }),
+      el("button", { text: "Read Item", onclick: () => readItem().catch(showTxError) }),
       el("pre", { id: "itemOut" }),
       el("div", { id: "itemMetaOut" })
     ])
@@ -1290,14 +1359,14 @@ async function renderBuyer(container) {
       inputRow("buyer(for permit)", "buyBuyer", connectedAddress || ""),
       inputRow("payToken(for approve)", "buyPayToken"),
       inputRow("approveAmount(uint256)", "buyApproveAmount", "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"),
-      el("button", { text: "Approve", onclick: () => approvePayToken().catch((e) => setText("txOut", String(e))) }),
+      el("button", { text: "Approve", onclick: () => approvePayToken().catch(showTxError) }),
       el("h4", { text: "Serial Permit (optional)" }),
       inputRow("serial", "serial", "SERIAL-001"),
       inputRow("deadline(ts)", "serialDeadline", String(Math.floor(Date.now() / 1000) + 3600)),
       inputRow("extraData(hex)", "buyExtraData", "0x"),
-      el("button", { text: "Fetch extraData", onclick: () => fetchSerialExtraData().catch((e) => setText("txOut", String(e))) }),
+      el("button", { text: "Fetch extraData", onclick: () => fetchSerialExtraData().catch(showTxError) }),
       inputRow("ethValue(optional)", "buyEthValue", ""),
-      el("button", { text: "Buy", onclick: () => buy().catch((e) => setText("txOut", String(e))) })
+      el("button", { text: "Buy", onclick: () => buy().catch(showTxError) })
     ])
   );
 
@@ -1333,7 +1402,7 @@ async function renderShopConsole(container) {
           el("span", { text: " item+action editor(8)" })
         ])
       ]),
-      el("button", { text: "Set Roles", onclick: () => setShopRolesTx().catch((e) => setText("txOut", String(e))) })
+      el("button", { text: "Set Roles", onclick: () => setShopRolesTx().catch(showTxError) })
     ])
   );
 
@@ -1344,7 +1413,7 @@ async function renderShopConsole(container) {
       el("h3", { text: "Register Shop" }),
       inputRow("treasury", "shopTreasury"),
       inputRow("metadataHash(bytes32)", "shopMetadataHash", "0x" + "0".repeat(64)),
-      el("button", { text: "Register", onclick: () => registerShop().catch((e) => setText("txOut", String(e))) })
+      el("button", { text: "Register", onclick: () => registerShop().catch(showTxError) })
     ])
   );
 
@@ -1356,7 +1425,7 @@ async function renderShopConsole(container) {
       inputRow("shopId", "shopIdUpdateShop", "1"),
       inputRow("treasury", "shopTreasuryUpdateShop"),
       inputRow("metadataHash(bytes32)", "shopMetadataHashUpdateShop", "0x" + "0".repeat(64)),
-      el("button", { text: "Update", onclick: () => updateShopTx().catch((e) => setText("txOut", String(e))) })
+      el("button", { text: "Update", onclick: () => updateShopTx().catch(showTxError) })
     ])
   );
 
@@ -1367,7 +1436,7 @@ async function renderShopConsole(container) {
       el("h3", { text: "Pause Shop (shop admin or protocol governance)" }),
       inputRow("shopId", "shopIdPause", "1"),
       inputRow("paused(true|false)", "shopPaused", "true"),
-      el("button", { text: "Set", onclick: () => setShopPausedTx().catch((e) => setText("txOut", String(e))) })
+      el("button", { text: "Set", onclick: () => setShopPausedTx().catch(showTxError) })
     ])
   );
 
@@ -1378,7 +1447,7 @@ async function renderShopConsole(container) {
       el("h3", { text: "Item Active (maintainer)" }),
       inputRow("itemId", "itemIdActive", "1"),
       inputRow("active(true|false)", "itemActive", "true"),
-      el("button", { text: "Set Active", onclick: () => setItemActiveTx().catch((e) => setText("txOut", String(e))) })
+      el("button", { text: "Set Active", onclick: () => setItemActiveTx().catch(showTxError) })
     ])
   );
 
@@ -1394,7 +1463,7 @@ async function renderShopConsole(container) {
       inputRow("soulbound(true|false)", "soulboundUpdate", "true"),
       inputRow("tokenURI", "tokenURIUpdate", "ipfs://token"),
       inputRow("requiresSerial(true|false)", "requiresSerialUpdate", "true"),
-      el("button", { text: "Update Item", onclick: () => updateItemTx().catch((e) => setText("txOut", String(e))) })
+      el("button", { text: "Update Item", onclick: () => updateItemTx().catch(showTxError) })
     ])
   );
 
@@ -1408,7 +1477,7 @@ async function renderShopConsole(container) {
       inputRow("actionData(hex)", "actionDataUpdate", "0x"),
       el("button", {
         text: "Update Action",
-        onclick: () => updateItemActionTx().catch((e) => setText("txOut", String(e)))
+        onclick: () => updateItemActionTx().catch(showTxError)
       })
     ])
   );
@@ -1423,14 +1492,14 @@ async function renderShopConsole(container) {
       inputRow("contentHash(bytes32 optional)", "pageHash", "0x" + "0".repeat(64)),
       el("button", {
         text: "Add Page Version",
-        onclick: () => addItemPageTx().catch((e) => setText("txOut", String(e)))
+        onclick: () => addItemPageTx().catch(showTxError)
       }),
       el("h4", { text: "Default Page" }),
       inputRow("itemId", "itemIdDefaultPage", "1"),
       inputRow("version", "defaultPageVersion", "1"),
       el("button", {
         text: "Set Default",
-        onclick: () => setDefaultItemPageTx().catch((e) => setText("txOut", String(e)))
+        onclick: () => setDefaultItemPageTx().catch(showTxError)
       })
     ])
   );
@@ -1455,8 +1524,8 @@ async function renderShopConsole(container) {
       inputRow("deadline(ts)", "riskDeadline", String(Math.floor(Date.now() / 1000) + 3600)),
       inputRow("nonce(auto fill)", "riskNonce", ""),
       inputRow("signature(auto fill)", "riskSig", "0x"),
-      el("button", { text: "Fetch Risk Sig", onclick: () => fetchRiskSig().catch((e) => setText("txOut", String(e))) }),
-      el("button", { text: "Add", onclick: () => addItem().catch((e) => setText("txOut", String(e))) })
+      el("button", { text: "Fetch Risk Sig", onclick: () => fetchRiskSig().catch(showTxError) }),
+      el("button", { text: "Add", onclick: () => addItem().catch(showTxError) })
     ])
   );
 
@@ -1468,11 +1537,11 @@ async function renderShopConsole(container) {
       inputRow("shopId", "shopIdExport", "1"),
       el("button", {
         text: "Export Shop Items (json)",
-        onclick: () => exportShopItemsTx().catch((e) => setText("txOut", String(e)))
+        onclick: () => exportShopItemsTx().catch(showTxError)
       }),
       el("h4", { text: "Import (paste json)" }),
       el("textarea", { id: "importJson", rows: "8", style: "width: 100%;", placeholder: "{...}" }),
-      el("button", { text: "Import Items", onclick: () => importShopItemsTx().catch((e) => setText("txOut", String(e))) })
+      el("button", { text: "Import Items", onclick: () => importShopItemsTx().catch(showTxError) })
     ])
   );
 }
@@ -1483,19 +1552,19 @@ async function renderProtocolConsole(container) {
   container.appendChild(
     el("div", {}, [
       el("h3", { text: "MyShops（协议参数）" }),
-      el("button", { text: "Read", onclick: () => readProtocolConfig().catch((e) => setText("txOut", String(e))) }),
+      el("button", { text: "Read", onclick: () => readProtocolConfig().catch(showTxError) }),
       el("pre", { id: "platformOut" }),
       inputRow("registry", "platformRegistry"),
-      el("button", { text: "Set Registry", onclick: () => setRegistryTx().catch((e) => setText("txOut", String(e))) }),
+      el("button", { text: "Set Registry", onclick: () => setRegistryTx().catch(showTxError) }),
       inputRow("platformTreasury", "platformTreasury"),
-      el("button", { text: "Set Protocol Treasury", onclick: () => setProtocolTreasuryTx().catch((e) => setText("txOut", String(e))) }),
+      el("button", { text: "Set Protocol Treasury", onclick: () => setProtocolTreasuryTx().catch(showTxError) }),
       inputRow("listingFeeToken", "platformListingFeeToken"),
       inputRow("listingFeeAmount(uint256)", "platformListingFeeAmount", "0"),
-      el("button", { text: "Set Listing Fee", onclick: () => setListingFeeTx().catch((e) => setText("txOut", String(e))) }),
+      el("button", { text: "Set Listing Fee", onclick: () => setListingFeeTx().catch(showTxError) }),
       inputRow("protocolFeeBps(uint16)", "platformFeeBps", "100"),
-      el("button", { text: "Set Protocol Fee", onclick: () => setProtocolFeeTx().catch((e) => setText("txOut", String(e))) }),
+      el("button", { text: "Set Protocol Fee", onclick: () => setProtocolFeeTx().catch(showTxError) }),
       inputRow("newOwner", "shopsNewOwner"),
-      el("button", { text: "Transfer MyShops Ownership", onclick: () => transferShopsOwnershipTx().catch((e) => setText("txOut", String(e))) })
+      el("button", { text: "Transfer MyShops Ownership", onclick: () => transferShopsOwnershipTx().catch(showTxError) })
     ])
   );
 
@@ -1504,17 +1573,17 @@ async function renderProtocolConsole(container) {
   container.appendChild(
     el("div", {}, [
       el("h3", { text: "MyShopItems Config" }),
-      el("button", { text: "Read", onclick: () => readItemsConfig().catch((e) => setText("txOut", String(e))) }),
+      el("button", { text: "Read", onclick: () => readItemsConfig().catch(showTxError) }),
       el("pre", { id: "itemsOut" }),
       inputRow("riskSigner", "itemsRiskSigner"),
-      el("button", { text: "Set Risk Signer", onclick: () => setRiskSignerTx().catch((e) => setText("txOut", String(e))) }),
+      el("button", { text: "Set Risk Signer", onclick: () => setRiskSignerTx().catch(showTxError) }),
       inputRow("serialSigner", "itemsSerialSigner"),
-      el("button", { text: "Set Serial Signer", onclick: () => setSerialSignerTx().catch((e) => setText("txOut", String(e))) }),
+      el("button", { text: "Set Serial Signer", onclick: () => setSerialSignerTx().catch(showTxError) }),
       inputRow("action", "itemsActionAddress"),
       inputRow("allowed(true|false)", "itemsActionAllowed", "true"),
-      el("button", { text: "Set Action Allowed", onclick: () => setActionAllowedTx().catch((e) => setText("txOut", String(e))) }),
+      el("button", { text: "Set Action Allowed", onclick: () => setActionAllowedTx().catch(showTxError) }),
       inputRow("newOwner", "itemsNewOwner"),
-      el("button", { text: "Transfer MyShopItems Ownership", onclick: () => transferItemsOwnershipTx().catch((e) => setText("txOut", String(e))) })
+      el("button", { text: "Transfer MyShopItems Ownership", onclick: () => transferItemsOwnershipTx().catch(showTxError) })
     ])
   );
 }
@@ -1552,7 +1621,7 @@ async function renderConfig(container) {
           document.getElementById("workerApiUrl").value = runtimeCfg.workerApiUrl || "";
         }
       }),
-      el("button", { text: "Load from Worker /config", onclick: () => loadConfigFromWorker().catch((e) => setText("txOut", String(e))) }),
+      el("button", { text: "Load from Worker /config", onclick: () => loadConfigFromWorker().catch(showTxError) }),
       el("button", { text: "Save & Apply", onclick: () => applyConfigFromInputs() })
     ])
   );
@@ -1571,7 +1640,7 @@ function render() {
 
   const header = el("div", {}, [
     el("h1", { text: "MyShop Plaza" }),
-    el("button", { text: "Connect Wallet", onclick: () => connect().catch((e) => setText("txOut", String(e))) }),
+    el("button", { text: "Connect Wallet", onclick: () => connect().catch(showTxError) }),
     el("div", { id: "conn", text: connectedAddress ? `connected: ${connectedAddress}` : "not connected" }),
     el("div", {}, [
       navLink("广场", "#/plaza"),
@@ -1624,7 +1693,7 @@ function render() {
       }
       window.location.hash = "#/plaza";
     } catch (e) {
-      setText("txOut", String(e));
+      showTxError(e);
     }
   })();
 }
