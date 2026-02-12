@@ -41,7 +41,9 @@ pnpm run dev
 - **签名服务（permit）**
   - `PORT`
   - `SERIAL_SIGNER_PRIVATE_KEY`（用于 `/serial-permit`）
+  - `SERIAL_SIGNER_PRIVATE_KEY_FILE`（推荐：从文件读取私钥）
   - `RISK_SIGNER_PRIVATE_KEY`（用于 `/risk-allowance`）
+  - `RISK_SIGNER_PRIVATE_KEY_FILE`（推荐：从文件读取私钥）
   - `SERIAL_ISSUER_URL`（可选：让服务端先向外部系统申请串号/哈希，再回签）
 - **聚合查询 API（可选）**
   - `ENABLE_API=1`
@@ -87,6 +89,58 @@ pnpm run dev
 `GET /risk-allowance?shopOwner=&maxItems=&deadline=&nonce=`
 
 返回 `signature`（用于 `addItem` 的 `signature` 字段）。
+
+## 签名密钥治理（B5）
+
+这两个 signer key 的共同特点：**不直接持有资金**，但会对业务风险与数据完整性产生决定性影响（例如放行购买串号、放大店铺可上架数量），所以仍需要“托管 / 轮换 / 审计 / 隔离”。
+
+### Key 分类与职责
+
+- **Serial Signer（SERIAL_SIGNER_PRIVATE_KEY）**
+  - 只用于 `SerialPermit`：把 `serialHash/deadline/nonce` 绑定到 buyer + itemId
+  - 目标：防止串号被伪造、复用或跨链/跨合约滥用
+- **Risk Signer（RISK_SIGNER_PRIVATE_KEY）**
+  - 只用于 `RiskAllowance`：允许 shopOwner 突破默认限制（如 maxItems）
+  - 目标：把“提升限制”变成显式、可审计的风控授权
+
+强烈建议两把 key **严格隔离**：不同机器/不同 Secret/不同权限的运维角色；若条件允许，拆成两个独立进程/容器分别提供 `/serial-permit` 与 `/risk-allowance`。
+
+### 托管（Storage）
+
+- 本地开发：可以直接用 `*_PRIVATE_KEY` 环境变量
+- 生产环境：不要把私钥直接写进环境变量，优先使用 `*_PRIVATE_KEY_FILE` 以便：
+  - Kubernetes Secret / Docker secret 以文件挂载
+  - 权限可控（文件权限、只读挂载）
+  - 轮换时只替换 secret 文件并滚动重启
+
+### 轮换（Rotation）
+
+由于签名验证发生在合约侧，轮换需要链上配合（典型做法是合约里有 signer 地址的可更新配置）。
+
+推荐流程（最小可行）：
+
+1. 生成新 key（离线或 KMS），拿到新 signer 地址
+2. 在低峰期把合约 signer 地址更新为新地址
+3. 部署/滚动重启 Worker，让它开始用新 key 签名
+4. 观察 `permit /metrics` 与业务交易成功率，确认新签名已生效
+5. 回收旧 key（撤销访问、销毁旧 secret、留存审计记录）
+
+如果要做到“无缝切换”，合约侧需要支持“双 signer 过渡期”（old/new 同时有效），再在稳定后下线 old。
+
+### 审计（Audit）
+
+- 建议在 Worker 的请求日志与 metrics 里持续观察：
+  - permit 请求量、错误量、限流量、内部异常量
+- 推荐把以下信息写入业务侧审计日志（不要记录私钥）：
+  - signer 地址（可从私钥推导或在配置里显式标注）
+  - 请求参数摘要（buyer/itemId/deadline/nonce 等），以及签名结果的 hash
+  - 请求来源（IP / user-agent / trace-id）
+
+### 最小权限与隔离（Least Privilege）
+
+- Worker 运行账户不应具备任何链上资产权限（不持有资金、不做链上写操作）
+- 不要复用“部署者/管理员”私钥作为 signer key
+- Risk signer 应更严格（更少人可接触、更严格的审批流程）
 
 ## Query API（聚合查询）
 
