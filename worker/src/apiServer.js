@@ -34,6 +34,7 @@ export async function startApiServer({ rpcUrl, chain, itemsAddress, port }) {
     pollIntervalMs: Number(process.env.INDEXER_POLL_INTERVAL_MS ?? "1000"),
     lookbackBlocks: BigInt(process.env.INDEXER_LOOKBACK_BLOCKS ?? "5000"),
     replayLookbackBlocks: BigInt(process.env.INDEXER_REPLAY_LOOKBACK_BLOCKS ?? "50"),
+    dedupeWindowBlocks: BigInt(process.env.INDEXER_DEDUPE_WINDOW_BLOCKS ?? "2048"),
     maxRecords: Number(process.env.INDEXER_MAX_RECORDS ?? "5000"),
     lastIndexedBlock: null,
     lastTipBlock: null,
@@ -52,6 +53,7 @@ export async function startApiServer({ rpcUrl, chain, itemsAddress, port }) {
     totalLogs: 0,
     purchases: [],
     purchaseKeys: new Set(),
+    droppedOnReplay: 0,
     running: false,
     stop: false,
     replayedOnStart: false,
@@ -127,6 +129,7 @@ export async function startApiServer({ rpcUrl, chain, itemsAddress, port }) {
           pollIntervalMs: indexer.pollIntervalMs,
           lookbackBlocks: indexer.lookbackBlocks.toString(),
           replayLookbackBlocks: indexer.replayLookbackBlocks.toString(),
+          dedupeWindowBlocks: indexer.dedupeWindowBlocks.toString(),
           maxRecords: indexer.maxRecords,
           lastIndexedBlock: indexer.lastIndexedBlock?.toString() ?? null,
           lastTipBlock: indexer.lastTipBlock?.toString() ?? null,
@@ -144,6 +147,7 @@ export async function startApiServer({ rpcUrl, chain, itemsAddress, port }) {
           lastLogsCount: indexer.lastLogsCount,
           totalLogFetches: indexer.totalLogFetches,
           totalLogs: indexer.totalLogs,
+          droppedOnReplay: indexer.droppedOnReplay,
           cachedPurchases: indexer.purchases.length,
           persist: {
             enabled: indexer.persist.enabled,
@@ -177,6 +181,8 @@ export async function startApiServer({ rpcUrl, chain, itemsAddress, port }) {
         if (indexer.lastLogsCount != null) lines.push(`myshop_indexer_last_logs_count ${indexer.lastLogsCount}`);
         if (indexer.lastRangeFromBlock != null) lines.push(`myshop_indexer_last_range_from_block ${indexer.lastRangeFromBlock.toString()}`);
         if (indexer.lastRangeToBlock != null) lines.push(`myshop_indexer_last_range_to_block ${indexer.lastRangeToBlock.toString()}`);
+        lines.push(`myshop_indexer_dedupe_window_blocks ${indexer.dedupeWindowBlocks.toString()}`);
+        lines.push(`myshop_indexer_dropped_on_replay ${indexer.droppedOnReplay}`);
         lines.push(`myshop_indexer_persist_enabled ${indexer.persist.enabled ? 1 : 0}`);
         lines.push(`myshop_indexer_persist_errors ${indexer.persist.errors}`);
         if (indexer.persist.lastSavedAtMs != null) lines.push(`myshop_indexer_persist_last_saved_at_ms ${indexer.persist.lastSavedAtMs}`);
@@ -633,6 +639,30 @@ function _decodePurchasedLog({ chainId, log }) {
   };
 }
 
+function _rebuildPurchaseKeys(indexer) {
+  indexer.purchaseKeys = new Set(indexer.purchases.map((p) => `${p.txHash}:${p.logIndex}`));
+}
+
+function _dropPurchasesFromBlock(indexer, fromBlock) {
+  const threshold = Number(fromBlock);
+  const before = indexer.purchases.length;
+  indexer.purchases = indexer.purchases.filter((p) => Number(p.blockNumber) < threshold);
+  const dropped = before - indexer.purchases.length;
+  _rebuildPurchaseKeys(indexer);
+  return dropped;
+}
+
+function _trimPurchasesToWindow(indexer) {
+  if (indexer.lastIndexedBlock == null) return;
+  if (indexer.dedupeWindowBlocks <= 0n) return;
+  const floorBlock = indexer.lastIndexedBlock > indexer.dedupeWindowBlocks ? indexer.lastIndexedBlock - indexer.dedupeWindowBlocks : 0n;
+  const floor = Number(floorBlock);
+  const before = indexer.purchases.length;
+  if (before === 0) return;
+  indexer.purchases = indexer.purchases.filter((p) => Number(p.blockNumber) >= floor);
+  if (indexer.purchases.length !== before) _rebuildPurchaseKeys(indexer);
+}
+
 async function _startIndexer({ client, chainId, itemsAddress, cache, indexer }) {
   if (indexer.lastIndexedBlock == null) {
     const latest = await client.getBlockNumber();
@@ -643,6 +673,7 @@ async function _startIndexer({ client, chainId, itemsAddress, cache, indexer }) 
   if (!indexer.replayedOnStart && indexer.persist.enabled && indexer.replayLookbackBlocks > 0n) {
     const rewind = indexer.lastIndexedBlock > indexer.replayLookbackBlocks ? indexer.replayLookbackBlocks : indexer.lastIndexedBlock;
     indexer.lastIndexedBlock = indexer.lastIndexedBlock - rewind;
+    indexer.droppedOnReplay += _dropPurchasesFromBlock(indexer, indexer.lastIndexedBlock + 1n);
     indexer.replayedOnStart = true;
   }
 
@@ -706,6 +737,7 @@ async function _startIndexer({ client, chainId, itemsAddress, cache, indexer }) 
       }
 
       indexer.lastIndexedBlock = toBlock;
+      _trimPurchasesToWindow(indexer);
       _schedulePersistIndexerState({ indexer, chainId, itemsAddress });
       if (indexer.consecutiveErrors > 0) indexer.recoveredFromErrorCount += 1;
       indexer.lastSuccessAtMs = Date.now();
