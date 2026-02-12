@@ -10,6 +10,7 @@ node_modules/
 **/dist/
 demo/demo.json
 demo/worker.log
+demo/indexer_state.json
 contracts/broadcast/
 contracts/cache/
 worker/data/
