@@ -1,4 +1,6 @@
 import http from "node:http";
+import fs from "node:fs/promises";
+import path from "node:path";
 import { URL } from "node:url";
 
 import { decodeEventLog, getAddress, http as httpTransport, parseAbiItem } from "viem";
@@ -36,8 +38,24 @@ export async function startApiServer({ rpcUrl, chain, itemsAddress, port }) {
     purchases: [],
     purchaseKeys: new Set(),
     running: false,
-    stop: false
+    stop: false,
+    persist: {
+      enabled: process.env.INDEXER_PERSIST === "1" || process.env.INDEXER_PERSIST_PATH != null,
+      path: process.env.INDEXER_PERSIST_PATH ?? null,
+      lastSavedAtMs: null,
+      saveInFlight: false,
+      saveScheduled: false,
+      saveTimer: null,
+      errors: 0
+    }
   };
+
+  if (indexer.persist.enabled) {
+    indexer.persist.path =
+      indexer.persist.path ??
+      path.join(process.cwd(), "data", `indexer.${chain.id}.${items.toLowerCase()}.json`);
+    await _loadIndexerState({ indexer, chainId: chain.id, itemsAddress: items });
+  }
 
   if (indexer.enabled) {
     indexer.running = true;
@@ -48,6 +66,16 @@ export async function startApiServer({ rpcUrl, chain, itemsAddress, port }) {
 
   const server = http.createServer(async (req, res) => {
     try {
+      if (req.method === "OPTIONS") {
+        res.writeHead(204, {
+          "access-control-allow-origin": "*",
+          "access-control-allow-methods": "GET,POST,OPTIONS",
+          "access-control-allow-headers": "content-type"
+        });
+        res.end();
+        return;
+      }
+
       const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
 
       if (url.pathname === "/health") {
@@ -80,7 +108,13 @@ export async function startApiServer({ rpcUrl, chain, itemsAddress, port }) {
           lookbackBlocks: indexer.lookbackBlocks.toString(),
           maxRecords: indexer.maxRecords,
           lastIndexedBlock: indexer.lastIndexedBlock?.toString() ?? null,
-          cachedPurchases: indexer.purchases.length
+          cachedPurchases: indexer.purchases.length,
+          persist: {
+            enabled: indexer.persist.enabled,
+            path: indexer.persist.path,
+            lastSavedAtMs: indexer.persist.lastSavedAtMs,
+            errors: indexer.persist.errors
+          }
         });
       }
 
@@ -222,6 +256,9 @@ export async function startApiServer({ rpcUrl, chain, itemsAddress, port }) {
     close: () =>
       new Promise((resolve, reject) => {
         indexer.stop = true;
+        if (indexer.persist.enabled) {
+          void _persistIndexerState({ indexer, chainId: chain.id, itemsAddress: items });
+        }
         server.close((err) => (err ? reject(err) : resolve()));
       }),
     port
@@ -229,7 +266,12 @@ export async function startApiServer({ rpcUrl, chain, itemsAddress, port }) {
 }
 
 function _json(res, status, obj) {
-  res.writeHead(status, { "content-type": "application/json" });
+  res.writeHead(status, {
+    "content-type": "application/json",
+    "access-control-allow-origin": "*",
+    "access-control-allow-methods": "GET,POST,OPTIONS",
+    "access-control-allow-headers": "content-type"
+  });
   res.end(JSON.stringify(obj));
 }
 
@@ -411,6 +453,85 @@ async function _getPurchasesFromIndex({
   return enriched;
 }
 
+async function _loadIndexerState({ indexer, chainId, itemsAddress }) {
+  const filePath = indexer.persist.path;
+  if (!filePath) return;
+
+  let raw;
+  try {
+    raw = await fs.readFile(filePath, "utf8");
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (msg.includes("ENOENT")) return;
+    indexer.persist.errors += 1;
+    return;
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    indexer.persist.errors += 1;
+    return;
+  }
+
+  if (parsed?.version !== 1) return;
+  if (Number(parsed?.chainId) !== Number(chainId)) return;
+  if (typeof parsed?.itemsAddress !== "string") return;
+  if (getAddress(parsed.itemsAddress) !== getAddress(itemsAddress)) return;
+
+  const lastIndexedBlock = parsed?.lastIndexedBlock != null ? BigInt(parsed.lastIndexedBlock) : null;
+  const purchases = Array.isArray(parsed?.purchases) ? parsed.purchases : null;
+  if (!purchases) return;
+
+  indexer.purchases = purchases.slice(-indexer.maxRecords);
+  indexer.purchaseKeys = new Set(indexer.purchases.map((p) => `${p.txHash}:${p.logIndex}`));
+  if (lastIndexedBlock != null) {
+    indexer.lastIndexedBlock = lastIndexedBlock;
+  }
+}
+
+function _schedulePersistIndexerState({ indexer, chainId, itemsAddress }) {
+  if (!indexer.persist.enabled) return;
+  if (indexer.persist.saveInFlight) return;
+  if (indexer.persist.saveScheduled) return;
+
+  indexer.persist.saveScheduled = true;
+  indexer.persist.saveTimer = setTimeout(() => {
+    indexer.persist.saveScheduled = false;
+    void _persistIndexerState({ indexer, chainId, itemsAddress });
+  }, 200);
+}
+
+async function _persistIndexerState({ indexer, chainId, itemsAddress }) {
+  if (!indexer.persist.enabled) return;
+  if (indexer.persist.saveInFlight) return;
+
+  const filePath = indexer.persist.path;
+  if (!filePath) return;
+
+  indexer.persist.saveInFlight = true;
+  try {
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+
+    const tmpPath = `${filePath}.tmp`;
+    const payload = {
+      version: 1,
+      chainId: Number(chainId),
+      itemsAddress,
+      lastIndexedBlock: indexer.lastIndexedBlock?.toString() ?? null,
+      purchases: indexer.purchases
+    };
+    await fs.writeFile(tmpPath, JSON.stringify(payload), "utf8");
+    await fs.rename(tmpPath, filePath);
+    indexer.persist.lastSavedAtMs = Date.now();
+  } catch {
+    indexer.persist.errors += 1;
+  } finally {
+    indexer.persist.saveInFlight = false;
+  }
+}
+
 function _decodePurchasedLog({ chainId, log }) {
   const decoded = decodeEventLog({
     abi: myShopItemsAbi,
@@ -437,9 +558,11 @@ function _decodePurchasedLog({ chainId, log }) {
 }
 
 async function _startIndexer({ client, chainId, itemsAddress, cache, indexer }) {
-  const latest = await client.getBlockNumber();
-  const startFrom = latest > indexer.lookbackBlocks ? latest - indexer.lookbackBlocks : 0n;
-  indexer.lastIndexedBlock = startFrom > 0n ? startFrom - 1n : 0n;
+  if (indexer.lastIndexedBlock == null) {
+    const latest = await client.getBlockNumber();
+    const startFrom = latest > indexer.lookbackBlocks ? latest - indexer.lookbackBlocks : 0n;
+    indexer.lastIndexedBlock = startFrom > 0n ? startFrom - 1n : 0n;
+  }
 
   while (!indexer.stop) {
     const tip = await client.getBlockNumber();
@@ -469,6 +592,7 @@ async function _startIndexer({ client, chainId, itemsAddress, cache, indexer }) 
       }
 
       indexer.lastIndexedBlock = toBlock;
+      _schedulePersistIndexerState({ indexer, chainId, itemsAddress });
     }
 
     await new Promise((r) => setTimeout(r, indexer.pollIntervalMs));

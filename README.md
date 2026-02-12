@@ -106,7 +106,7 @@ sequenceDiagram
   Buyer->>Items: buy(itemId,qty,recipient, extraData(serialHash,deadline,nonce,signature))
   Items->>Items: 校验 SerialPermit + nonce 未使用
   Items->>Shops: 读取 feeBps / treasury
-  Items->>Pay: transferFrom(buyer, Treasury, platformFee)
+  Items->>Pay: transferFrom(buyer, Treasury, protocolFee)
   Items->>Pay: transferFrom(buyer, ShopTreasury, netAmount)
   Items->>NFT: mint(recipient, tokenURI, soulbound)
   Items->>Action: execute(buyer,recipient,itemId,shopId,qty,actionData,extraData)
@@ -117,6 +117,8 @@ sequenceDiagram
 
 - 架构与流程说明：[docs/architecture.md](docs/architecture.md)
 - 五步走规划与进度：[Solution.md](Solution.md)
+- 里程碑与任务（从 Demo 到可上线）：[docs/milestones.md](docs/milestones.md)
+- 可执行测试用例清单（E2E）：[docs/test_cases.md](docs/test_cases.md)
 - Shop 管理模块设计：[docs/shop_management.md](docs/shop_management.md)
 - Worker（监听/签名/通知）使用说明：[docs/worker.md](docs/worker.md)
 - 本地一键演示：[docs/demo_local.md](docs/demo_local.md)
@@ -148,6 +150,12 @@ sequenceDiagram
   - Query API：`/shops` `/items` `/purchases` + 内存索引（可配置 `source=index|chain`）
 
 ### Worker 三大功能（带全流程示例）
+
+Worker 的主要作用可以归成 3 类（对应你现在这套“链上协议 + 轻服务”架构）：
+
+- 购买事件监听与通知（Watcher）：持续监听 Purchased 等链上事件，把原始 event 补全成可读 payload（例如解析 item/shop、金额、serialHash 等），然后按需触发 Webhook/Telegram，方便“成交通知/落库/后续发货或权益发放”。
+- 签名/Permit 服务（Permit Server）：为链上可验证的 off-chain 逻辑提供 EIP-712 签名（例如 SerialPermit、RiskAllowance），把“串号发放/风控放行”等逻辑从合约里抽出来，但仍保持链上校验与可追溯。
+- 查询 API + 轻索引（Query API/Indexer）：提供 /shops /items /purchases 这类聚合读取接口；可用内存索引加速查询，同时保留链上读取回退路径，给前端/SDK 一个稳定的数据入口。
 
 1. Purchased 监听（watch）
 

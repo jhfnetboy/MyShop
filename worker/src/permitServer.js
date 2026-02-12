@@ -40,10 +40,25 @@ export async function startPermitServer({
 
   const server = http.createServer(async (req, res) => {
     try {
+      if (req.method === "OPTIONS") {
+        res.writeHead(204, {
+          "access-control-allow-origin": "*",
+          "access-control-allow-methods": "GET,POST,OPTIONS",
+          "access-control-allow-headers": "content-type"
+        });
+        res.end();
+        return;
+      }
+
       const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
 
       if (url.pathname === "/health") {
-        res.writeHead(200, { "content-type": "application/json" });
+        res.writeHead(200, {
+          "content-type": "application/json",
+          "access-control-allow-origin": "*",
+          "access-control-allow-methods": "GET,POST,OPTIONS",
+          "access-control-allow-headers": "content-type"
+        });
         res.end(JSON.stringify({ ok: true }));
         return;
       }
@@ -83,7 +98,12 @@ export async function startPermitServer({
           [serialHash, deadline, nonce, signature]
         );
 
-        res.writeHead(200, { "content-type": "application/json" });
+        res.writeHead(200, {
+          "content-type": "application/json",
+          "access-control-allow-origin": "*",
+          "access-control-allow-methods": "GET,POST,OPTIONS",
+          "access-control-allow-headers": "content-type"
+        });
         res.end(
           JSON.stringify({
             buyer,
@@ -120,7 +140,12 @@ export async function startPermitServer({
           message: { shopOwner, maxItems, deadline, nonce }
         });
 
-        res.writeHead(200, { "content-type": "application/json" });
+        res.writeHead(200, {
+          "content-type": "application/json",
+          "access-control-allow-origin": "*",
+          "access-control-allow-methods": "GET,POST,OPTIONS",
+          "access-control-allow-headers": "content-type"
+        });
         res.end(
           JSON.stringify({
             shopOwner,
@@ -133,10 +158,20 @@ export async function startPermitServer({
         return;
       }
 
-      res.writeHead(404, { "content-type": "application/json" });
+      res.writeHead(404, {
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-allow-methods": "GET,POST,OPTIONS",
+        "access-control-allow-headers": "content-type"
+      });
       res.end(JSON.stringify({ error: "not_found" }));
     } catch (e) {
-      res.writeHead(400, { "content-type": "application/json" });
+      res.writeHead(400, {
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "access-control-allow-methods": "GET,POST,OPTIONS",
+        "access-control-allow-headers": "content-type"
+      });
       res.end(JSON.stringify({ error: e instanceof Error ? e.message : String(e) }));
     }
   });
