@@ -1,4 +1,5 @@
 import { getAddress } from "viem";
+import fs from "node:fs";
 
 import { optionalEnv, requireEnv } from "./env.js";
 import { startApiServer } from "./apiServer.js";
@@ -24,8 +25,14 @@ const telegramChatId = optionalEnv("TELEGRAM_CHAT_ID", "");
 const pollIntervalMs = Number(optionalEnv("POLL_INTERVAL_MS", "4000"));
 const lookbackBlocks = Number(optionalEnv("LOOKBACK_BLOCKS", "50"));
 
-const serialSignerPrivateKey = optionalEnv("SERIAL_SIGNER_PRIVATE_KEY", "");
-const riskSignerPrivateKey = optionalEnv("RISK_SIGNER_PRIVATE_KEY", "");
+const serialSignerPrivateKey = _readSecret({
+  value: optionalEnv("SERIAL_SIGNER_PRIVATE_KEY", ""),
+  filePath: optionalEnv("SERIAL_SIGNER_PRIVATE_KEY_FILE", "")
+});
+const riskSignerPrivateKey = _readSecret({
+  value: optionalEnv("RISK_SIGNER_PRIVATE_KEY", ""),
+  filePath: optionalEnv("RISK_SIGNER_PRIVATE_KEY_FILE", "")
+});
 const serialIssuerUrl = optionalEnv("SERIAL_ISSUER_URL", "");
 const port = Number(optionalEnv("PORT", "8787"));
 const enableApi = optionalEnv("ENABLE_API", "0") === "1";
@@ -95,4 +102,10 @@ function normalizePrivateKey(value) {
   const hex = value.startsWith("0x") ? value : `0x${value}`;
   if (!/^0x[0-9a-fA-F]{64}$/.test(hex)) throw new Error("Invalid private key format");
   return hex;
+}
+
+function _readSecret({ value, filePath }) {
+  if (value) return value;
+  if (!filePath) return "";
+  return fs.readFileSync(filePath, "utf8").trim();
 }

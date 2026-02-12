@@ -136,7 +136,7 @@ rm -f "${INDEXER_STATE_PATH}"
   cd "${ROOT_DIR}/worker"
   MODE="both" ENABLE_API="1" ENABLE_INDEXER="1" RPC_URL="${RPC_URL}" CHAIN_ID="${DEMO_CHAIN_ID}" ITEMS_ADDRESS="${DEMO_ITEMS}" PORT="${WORKER_PORT}" API_PORT="${API_PORT}" \
     POLL_INTERVAL_MS="200" LOOKBACK_BLOCKS="50" \
-    INDEXER_PERSIST="1" INDEXER_PERSIST_PATH="${INDEXER_STATE_PATH}" \
+    INDEXER_PERSIST_PATH="${INDEXER_STATE_PATH}" \
     SERIAL_SIGNER_PRIVATE_KEY="${SERIAL_SIGNER_PK}" RISK_SIGNER_PRIVATE_KEY="${RISK_SIGNER_PK}" \
     node src/index.js
 ) > "${WORKER_LOG}" 2>&1 &
@@ -182,7 +182,7 @@ WORKER_PID=""
   cd "${ROOT_DIR}/worker"
   MODE="both" ENABLE_API="1" ENABLE_INDEXER="1" RPC_URL="${RPC_URL}" CHAIN_ID="${DEMO_CHAIN_ID}" ITEMS_ADDRESS="${DEMO_ITEMS}" PORT="${WORKER_PORT}" API_PORT="${API_PORT}" \
     POLL_INTERVAL_MS="200" LOOKBACK_BLOCKS="50" \
-    INDEXER_PERSIST="1" INDEXER_PERSIST_PATH="${INDEXER_STATE_PATH}" \
+    INDEXER_PERSIST_PATH="${INDEXER_STATE_PATH}" \
     SERIAL_SIGNER_PRIVATE_KEY="${SERIAL_SIGNER_PK}" RISK_SIGNER_PRIVATE_KEY="${RISK_SIGNER_PK}" \
     node src/index.js
 ) >> "${WORKER_LOG}" 2>&1 &
@@ -214,6 +214,25 @@ REPLAY_RC="$?"
 set -e
 if [ "${REPLAY_RC}" -eq 0 ]; then
   echo "expected nonce replay buy to fail, but it succeeded" >&2
+  exit 1
+fi
+
+echo "case B-05: permission denied (expected failure)"
+set +e
+cast send --rpc-url "${RPC_URL}" --private-key "${BUYER_PK}" "${DEMO_SHOPS}" "setShopPaused(uint256,bool)" "${DEMO_SHOP_ID}" true >/dev/null
+PAUSE_UNAUTH_RC="$?"
+set -e
+if [ "${PAUSE_UNAUTH_RC}" -eq 0 ]; then
+  echo "expected non-owner to pause shop to fail, but it succeeded" >&2
+  exit 1
+fi
+
+set +e
+cast send --rpc-url "${RPC_URL}" --private-key "${BUYER_PK}" "${DEMO_ITEMS}" "setItemActive(uint256,bool)" "${DEMO_ITEM_ID}" false >/dev/null
+ITEM_UNAUTH_RC="$?"
+set -e
+if [ "${ITEM_UNAUTH_RC}" -eq 0 ]; then
+  echo "expected non-owner to set item active to fail, but it succeeded" >&2
   exit 1
 fi
 

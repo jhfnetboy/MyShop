@@ -1,1 +1,4 @@
-ENABLE_API=1 bash scripts/demo_local.sh
+set -euo pipefail
+
+bash scripts/regression_local.sh
+pnpm -C worker test
