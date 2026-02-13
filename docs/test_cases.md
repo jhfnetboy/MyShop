@@ -10,6 +10,18 @@
 ./scripts/regression_local.sh
 ```
 
+或直接用 pnpm（推荐，CI/本地更一致）：
+
+```bash
+pnpm -C worker regression
+```
+
+仅跑前端构建 + E2E：
+
+```bash
+pnpm -C frontend regression
+```
+
 ```bash
 export RPC_URL="http://127.0.0.1:8545"
 export CHAIN_ID="31337"

@@ -79,10 +79,14 @@ echo "api: http://127.0.0.1:${API_PORT}"
 
 ANVIL_PID=""
 WORKER_PID=""
+MINER_PID=""
 
 cleanup() {
   if [ -n "${WORKER_PID}" ]; then
     kill "${WORKER_PID}" >/dev/null 2>&1 || true
+  fi
+  if [ -n "${MINER_PID}" ]; then
+    kill "${MINER_PID}" >/dev/null 2>&1 || true
   fi
   if [ -n "${ANVIL_PID}" ]; then
     kill "${ANVIL_PID}" >/dev/null 2>&1 || true
@@ -105,7 +109,25 @@ for _ in $(seq 1 80); do
 done
 cast block-number --rpc-url "${RPC_URL}" >/dev/null
 
+start_miner() {
+  (
+    while true; do
+      cast rpc anvil_mine 0x1 --rpc-url "${RPC_URL}" >/dev/null 2>&1 || true
+      sleep 0.2
+    done
+  ) &
+  MINER_PID="$!"
+}
+
+stop_miner() {
+  if [ -n "${MINER_PID}" ]; then
+    kill "${MINER_PID}" >/dev/null 2>&1 || true
+    MINER_PID=""
+  fi
+}
+
 echo "deploying demo contracts..."
+start_miner
 DEPLOY_OUT="$(
   (
     cd "${ROOT_DIR}/contracts"
@@ -113,6 +135,7 @@ DEPLOY_OUT="$(
       forge script script/DeployDemo.s.sol:DeployDemo --rpc-url "${RPC_URL}" --broadcast -vv
   )
 )"
+stop_miner
 
 DEPLOY_JSON="$(printf "%s" "${DEPLOY_OUT}" | node -e "let s='';process.stdin.on('data',d=>s+=d.toString());process.stdin.on('end',()=>{const lines=s.split(/\\r?\\n/).filter(Boolean);const jsonLine=[...lines].reverse().find(l=>l.trim().startsWith('{')&&l.trim().endsWith('}'));if(!jsonLine)process.exit(1);process.stdout.write(jsonLine.trim())})")"
 printf "%s\n" "${DEPLOY_JSON}" > "${DEMO_JSON}"
@@ -144,6 +167,13 @@ WORKER_PID="$!"
 
 wait_http_ok "http://127.0.0.1:${WORKER_PORT}/health" "worker /health"
 wait_http_ok "http://127.0.0.1:${API_PORT}/health" "api /health"
+
+echo "case OBS-01: metrics endpoints include key stats"
+PERMIT_METRICS="$(curl -sS "http://127.0.0.1:${WORKER_PORT}/metrics")"
+node -e "const s=process.argv[1];const assert=(c,m)=>{if(!c){console.error(m);process.exit(1)}};assert(s.includes('myshop_permit_requests_total '),'missing myshop_permit_requests_total');assert(s.includes('myshop_permit_rate_limited_total '),'missing myshop_permit_rate_limited_total');assert(s.includes('myshop_permit_path__health_requests_total '),'missing permit per-path /health counter');" "${PERMIT_METRICS}"
+
+API_METRICS="$(curl -sS "http://127.0.0.1:${API_PORT}/metrics")"
+node -e "const s=process.argv[1];const assert=(c,m)=>{if(!c){console.error(m);process.exit(1)}};assert(s.includes('myshop_api_requests_total '),'missing myshop_api_requests_total');assert(s.includes('myshop_api_ok_total '),'missing myshop_api_ok_total');assert(s.includes('myshop_api_path__health_requests_total '),'missing api per-path /health counter');" "${API_METRICS}"
 
 echo "approve usdc for buyer..."
 cast send --rpc-url "${RPC_URL}" --private-key "${BUYER_PK}" "${DEMO_USDC}" \

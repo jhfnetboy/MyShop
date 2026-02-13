@@ -102,6 +102,49 @@ function spawnLogged(command: string, args: string[], opts: { cwd?: string; env?
   };
 }
 
+function startWorkerInstance(params: {
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+}) {
+  const child = spawn("node", ["src/index.js"], {
+    cwd: params.cwd,
+    env: params.env,
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+
+  const out: string[] = [];
+  child.stdout.on("data", (d) => out.push(d.toString()));
+  child.stderr.on("data", (d) => out.push(d.toString()));
+
+  let stopped = false;
+  const stop = async () => {
+    if (stopped) return;
+    stopped = true;
+    if (child.exitCode != null) return;
+
+    const closed = new Promise<void>((resolve) => child.once("close", () => resolve()));
+    try {
+      child.kill("SIGTERM");
+    } catch {
+    }
+
+    const timeoutMs = 3_000;
+    await Promise.race([
+      closed,
+      (async () => {
+        await sleep(timeoutMs);
+        try {
+          child.kill("SIGKILL");
+        } catch {
+        }
+        await closed;
+      })()
+    ]);
+  };
+
+  return { child, out, stop };
+}
+
 async function fetchJson(url: string) {
   const res = await fetch(url);
   const text = await res.text();
@@ -275,38 +318,38 @@ async function main() {
     });
     const serialKeyPath = path.join(secretsDir, "serial.key");
     const riskKeyPath = path.join(secretsDir, "risk.key");
+    const indexerPersistPath = path.join(secretsDir, "indexer.json");
     fs.writeFileSync(serialKeyPath, serialSignerPk, "utf8");
     fs.writeFileSync(riskKeyPath, riskSignerPk, "utf8");
 
-    const worker = spawn("node", ["src/index.js"], {
+    const workerEnvBase = {
+      ...process.env,
+      MODE: "both",
+      RPC_URL: rpcUrl,
+      CHAIN_ID: String(chainId),
+      ITEMS_ADDRESS: itemsAddress,
+      ENABLE_API: "1",
+      POLL_INTERVAL_MS: "200",
+      LOOKBACK_BLOCKS: "50",
+      SERIAL_SIGNER_PRIVATE_KEY: "",
+      SERIAL_SIGNER_PRIVATE_KEY_FILE: serialKeyPath,
+      RISK_SIGNER_PRIVATE_KEY: "",
+      RISK_SIGNER_PRIVATE_KEY_FILE: riskKeyPath,
+      PERMIT_RATE_LIMIT_MAX: "10",
+      PERMIT_RATE_LIMIT_WINDOW_MS: "60000",
+      INDEXER_PERSIST: "1",
+      INDEXER_PERSIST_PATH: indexerPersistPath
+    };
+
+    const worker1 = startWorkerInstance({
       cwd: workerDir,
       env: {
-        ...process.env,
-        MODE: "both",
-        RPC_URL: rpcUrl,
-        CHAIN_ID: String(chainId),
-        ITEMS_ADDRESS: itemsAddress,
+        ...workerEnvBase,
         PORT: String(permitPort),
-        ENABLE_API: "1",
-        API_PORT: String(apiPort),
-        POLL_INTERVAL_MS: "200",
-        LOOKBACK_BLOCKS: "50",
-        SERIAL_SIGNER_PRIVATE_KEY: "",
-        SERIAL_SIGNER_PRIVATE_KEY_FILE: serialKeyPath,
-        RISK_SIGNER_PRIVATE_KEY: "",
-        RISK_SIGNER_PRIVATE_KEY_FILE: riskKeyPath,
-        PERMIT_RATE_LIMIT_MAX: "10",
-        PERMIT_RATE_LIMIT_WINDOW_MS: "60000"
-      },
-      stdio: ["ignore", "pipe", "pipe"]
+        API_PORT: String(apiPort)
+      }
     });
-    started.push(async () => {
-      worker.kill("SIGTERM");
-    });
-
-    const workerOut: string[] = [];
-    worker.stdout.on("data", (d) => workerOut.push(d.toString()));
-    worker.stderr.on("data", (d) => workerOut.push(d.toString()));
+    started.push(worker1.stop);
 
     await waitFor(async () => {
       try {
@@ -731,22 +774,77 @@ async function main() {
     const purchases = await fetchJson(`http://127.0.0.1:${apiPort}/purchases?limit=10&include=enrich&source=index`);
     assert(purchases.ok === true, "purchases ok");
     assert(purchases.count >= 1, "expected at least 1 purchase");
+    assert(Array.isArray(purchases.purchases), "purchases list missing");
+    const firstPurchase = purchases.purchases[0];
+    const persistedKey = `${firstPurchase.txHash}:${firstPurchase.logIndex}`;
 
-    const cfg = await fetchJson(`http://127.0.0.1:${apiPort}/config`);
+    await waitFor(
+      async () => {
+        try {
+          const j = await fetchJson(`http://127.0.0.1:${apiPort}/indexer`);
+          return j?.ok === true && typeof j?.persist?.lastSavedAtMs === "number";
+        } catch {
+          return false;
+        }
+      },
+      10_000,
+      "indexer persisted state"
+    );
+
+    await worker1.stop();
+
+    const permitPort2 = await findFreePort(permitPort + 2);
+    const apiPort2 = await findFreePort(Math.max(apiPort + 2, permitPort2 + 1));
+
+    const worker2 = startWorkerInstance({
+      cwd: workerDir,
+      env: {
+        ...workerEnvBase,
+        PORT: String(permitPort2),
+        API_PORT: String(apiPort2)
+      }
+    });
+    started.push(worker2.stop);
+
+    await waitFor(async () => {
+      try {
+        const j = await fetchJson(`http://127.0.0.1:${permitPort2}/health`);
+        return j?.ok === true;
+      } catch {
+        return false;
+      }
+    }, 10_000, "permit server health after restart");
+
+    await waitFor(async () => {
+      try {
+        const j = await fetchJson(`http://127.0.0.1:${apiPort2}/health`);
+        return j?.ok === true;
+      } catch {
+        return false;
+      }
+    }, 10_000, "api server health after restart");
+
+    const purchasesAfterRestart = await fetchJson(`http://127.0.0.1:${apiPort2}/purchases?limit=10&include=enrich&source=index`);
+    assert(purchasesAfterRestart.ok === true, "purchases after restart ok");
+    assert(Array.isArray(purchasesAfterRestart.purchases), "purchases after restart list missing");
+    const keysAfterRestart = new Set(purchasesAfterRestart.purchases.map((p: any) => `${p.txHash}:${p.logIndex}`));
+    assert(keysAfterRestart.has(persistedKey), `missing persisted purchase after restart: ${persistedKey}`);
+
+    const cfg = await fetchJson(`http://127.0.0.1:${apiPort2}/config`);
     assert(cfg.itemsAddress === itemsAddress, "api config itemsAddress mismatch");
 
     {
-      const apiMetrics = await fetchRaw(`http://127.0.0.1:${apiPort}/metrics`);
+      const apiMetrics = await fetchRaw(`http://127.0.0.1:${apiPort2}/metrics`);
       assert(apiMetrics.ok === true, "api /metrics ok");
       mustContain(apiMetrics.text, "myshop_indexer_last_indexed_block", "api metrics");
       mustContain(apiMetrics.text, "myshop_indexer_lag_blocks", "api metrics");
       mustContain(apiMetrics.text, "myshop_indexer_consecutive_errors", "api metrics");
     }
 
-    const shops = await fetchJson(`http://127.0.0.1:${apiPort}/shops?limit=1`);
+    const shops = await fetchJson(`http://127.0.0.1:${apiPort2}/shops?limit=1`);
     assert(shops.ok === true, "shops ok");
 
-    const itemsList = await fetchJson(`http://127.0.0.1:${apiPort}/items?limit=1`);
+    const itemsList = await fetchJson(`http://127.0.0.1:${apiPort2}/items?limit=1`);
     assert(itemsList.ok === true, "items ok");
 
     process.stdout.write("smoke ok\n");

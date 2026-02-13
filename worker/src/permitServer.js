@@ -59,6 +59,7 @@ export async function startPermitServer({
     enabled: process.env.PERMIT_RATE_LIMIT === "0" ? false : true,
     windowMs: Number(process.env.PERMIT_RATE_LIMIT_WINDOW_MS ?? "60000"),
     max: Number(process.env.PERMIT_RATE_LIMIT_MAX ?? "120"),
+    maxBuckets: Number(process.env.PERMIT_RATE_LIMIT_MAX_BUCKETS ?? "5000"),
     buckets: new Map()
   };
 
@@ -70,10 +71,15 @@ export async function startPermitServer({
     rateLimitedTotal: 0,
     httpErrorTotal: 0,
     internalErrorTotal: 0,
-    errorCodeCounts: new Map()
+    errorCodeCounts: new Map(),
+    pathCounts: new Map(),
+    pathDurationSumMs: new Map(),
+    pathDurationCount: new Map()
   };
 
   const server = http.createServer(async (req, res) => {
+    const startedAtMs = Date.now();
+    let pathName = "unknown";
     try {
       if (req.method === "OPTIONS") {
         res.writeHead(204, {
@@ -86,6 +92,7 @@ export async function startPermitServer({
       }
 
       const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+      pathName = url.pathname;
       stats.requestsTotal += 1;
 
       if (url.pathname === "/health") {
@@ -125,6 +132,7 @@ export async function startPermitServer({
         lines.push(`myshop_permit_rate_limit_enabled ${limiter.enabled ? 1 : 0}`);
         lines.push(`myshop_permit_rate_limit_window_ms ${limiter.windowMs}`);
         lines.push(`myshop_permit_rate_limit_max ${limiter.max}`);
+        lines.push(`myshop_permit_rate_limit_max_buckets ${limiter.maxBuckets}`);
         lines.push(`myshop_permit_rate_limit_bucket_count ${limiter.buckets.size}`);
 
         const codes = Array.from(stats.errorCodeCounts.keys()).sort();
@@ -132,6 +140,14 @@ export async function startPermitServer({
           const count = stats.errorCodeCounts.get(code) ?? 0;
           const safeCode = String(code).replace(/[^a-zA-Z0-9_]/g, "_");
           lines.push(`myshop_permit_error_code_${safeCode}_total ${count}`);
+        }
+
+        const paths = Array.from(stats.pathCounts.keys()).sort();
+        for (const p of paths) {
+          const safePath = String(p).replace(/[^a-zA-Z0-9_]/g, "_");
+          lines.push(`myshop_permit_path_${safePath}_requests_total ${stats.pathCounts.get(p) ?? 0}`);
+          lines.push(`myshop_permit_path_${safePath}_duration_ms_sum ${stats.pathDurationSumMs.get(p) ?? 0}`);
+          lines.push(`myshop_permit_path_${safePath}_duration_ms_count ${stats.pathDurationCount.get(p) ?? 0}`);
         }
 
         stats.okTotal += 1;
@@ -263,6 +279,11 @@ export async function startPermitServer({
       stats.internalErrorTotal += 1;
       stats.errorCodeCounts.set("internal_error", (stats.errorCodeCounts.get("internal_error") ?? 0) + 1);
       _json(res, 500, { ok: false, error: e instanceof Error ? e.message : String(e), errorCode: "internal_error" });
+    } finally {
+      stats.pathCounts.set(pathName, (stats.pathCounts.get(pathName) ?? 0) + 1);
+      const durationMs = Date.now() - startedAtMs;
+      stats.pathDurationSumMs.set(pathName, (stats.pathDurationSumMs.get(pathName) ?? 0) + durationMs);
+      stats.pathDurationCount.set(pathName, (stats.pathDurationCount.get(pathName) ?? 0) + 1);
     }
   });
 
@@ -388,13 +409,36 @@ function _rateLimitOrThrow({ req, url, limiter }) {
   const now = Date.now();
 
   const existing = limiter.buckets.get(key);
-  if (!existing || now - existing.windowStartMs >= limiter.windowMs) {
-    limiter.buckets.set(key, { windowStartMs: now, count: 1 });
+  if (!existing) {
+    _evictIfNeeded(limiter, now);
+    limiter.buckets.set(key, { timestamps: [now], lastSeenMs: now });
     return;
   }
 
-  if (existing.count >= limiter.max) throw new RateLimitError();
-  existing.count += 1;
+  existing.lastSeenMs = now;
+  const cutoff = now - limiter.windowMs;
+  const ts = existing.timestamps;
+  let keepFrom = 0;
+  while (keepFrom < ts.length && ts[keepFrom] < cutoff) keepFrom++;
+  if (keepFrom > 0) ts.splice(0, keepFrom);
+
+  if (ts.length >= limiter.max) throw new RateLimitError();
+  ts.push(now);
+}
+
+function _evictIfNeeded(limiter, nowMs) {
+  if (limiter.buckets.size < limiter.maxBuckets) return;
+
+  let oldestKey = null;
+  let oldestSeen = Infinity;
+  for (const [k, v] of limiter.buckets.entries()) {
+    const seen = typeof v?.lastSeenMs === "number" ? v.lastSeenMs : nowMs;
+    if (seen < oldestSeen) {
+      oldestSeen = seen;
+      oldestKey = k;
+    }
+  }
+  if (oldestKey != null) limiter.buckets.delete(oldestKey);
 }
 
 async function _resolveNonce(publicClient, itemsAddress, user, nonceParam) {

@@ -1904,6 +1904,14 @@ async function renderShopConsole(container) {
     ])
   );
 
+  const refreshAccess = async () => {
+    const shopId = BigInt(val("shopIdAccess"));
+    const actor = getAddress(connectedAddress);
+    const access = await getShopAccess({ shopId, actor });
+    accessOut.textContent = JSON.stringify(access, null, 2);
+  };
+  await refreshAccess();
+
   const guardShop = ({ shopIdInputId, anyRolesMask = 0 }) => async (action) => {
     const shopId = BigInt(val(shopIdInputId));
     await requireShopAccess({ shopId, anyRolesMask });
@@ -1949,6 +1957,9 @@ async function renderShopConsole(container) {
     ])
   );
 
+  const roleOperatorEl = document.getElementById("roleOperator");
+  if (roleOperatorEl && !String(roleOperatorEl.value || "").trim() && connectedAddress) roleOperatorEl.value = connectedAddress;
+
   container.appendChild(el("hr"));
 
   container.appendChild(
@@ -1960,6 +1971,9 @@ async function renderShopConsole(container) {
     ])
   );
 
+  const shopTreasuryEl = document.getElementById("shopTreasury");
+  if (shopTreasuryEl && !String(shopTreasuryEl.value || "").trim() && connectedAddress) shopTreasuryEl.value = connectedAddress;
+
   container.appendChild(el("hr"));
 
   container.appendChild(
@@ -1970,7 +1984,8 @@ async function renderShopConsole(container) {
       inputRow("metadataHash(bytes32)", "shopMetadataHashUpdateShop", "0x" + "0".repeat(64)),
       el("button", {
         text: "Update",
-        onclick: () => guardShop({ shopIdInputId: "shopIdUpdateShop" })(() => updateShopTx()).catch(showTxError)
+        onclick: () =>
+          guardShop({ shopIdInputId: "shopIdUpdateShop", anyRolesMask: SHOP_ROLE_SHOP_ADMIN })(() => updateShopTx()).catch(showTxError)
       })
     ])
   );

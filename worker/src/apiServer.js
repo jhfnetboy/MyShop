@@ -86,9 +86,28 @@ export async function startApiServer({ rpcUrl, chain, itemsAddress, port }) {
     });
   }
 
+  const stats = {
+    requestsTotal: 0,
+    okTotal: 0,
+    httpErrorTotal: 0,
+    internalErrorTotal: 0,
+    pathCounts: new Map(),
+    pathDurationSumMs: new Map(),
+    pathDurationCount: new Map()
+  };
+
   const server = http.createServer(async (req, res) => {
+    const startedAtMs = Date.now();
+    let pathName = "unknown";
+    let statusCode = 0;
+    const originalWriteHead = res.writeHead;
+    res.writeHead = function (...args) {
+      statusCode = Number(args[0] ?? 0);
+      return originalWriteHead.apply(this, args);
+    };
     try {
       if (req.method === "OPTIONS") {
+        pathName = "OPTIONS";
         res.writeHead(204, {
           "access-control-allow-origin": "*",
           "access-control-allow-methods": "GET,POST,OPTIONS",
@@ -99,6 +118,7 @@ export async function startApiServer({ rpcUrl, chain, itemsAddress, port }) {
       }
 
       const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+      pathName = url.pathname;
 
       if (url.pathname === "/health") {
         return _json(res, 200, { ok: true });
@@ -174,6 +194,10 @@ export async function startApiServer({ rpcUrl, chain, itemsAddress, port }) {
         const lag = lastIndexed != null && lastTip != null ? lastTip - lastIndexed : null;
 
         const lines = [];
+        lines.push(`myshop_api_requests_total ${stats.requestsTotal}`);
+        lines.push(`myshop_api_ok_total ${stats.okTotal}`);
+        lines.push(`myshop_api_http_error_total ${stats.httpErrorTotal}`);
+        lines.push(`myshop_api_internal_error_total ${stats.internalErrorTotal}`);
         lines.push(`myshop_indexer_enabled ${enabled}`);
         lines.push(`myshop_indexer_running ${running}`);
         if (lastIndexed != null) lines.push(`myshop_indexer_last_indexed_block ${lastIndexed.toString()}`);
@@ -184,6 +208,9 @@ export async function startApiServer({ rpcUrl, chain, itemsAddress, port }) {
         lines.push(`myshop_indexer_total_polls ${indexer.totalPolls}`);
         lines.push(`myshop_indexer_total_errors ${indexer.totalErrors}`);
         lines.push(`myshop_indexer_recovered_from_error_count ${indexer.recoveredFromErrorCount}`);
+        if (indexer.lastPollAtMs != null) lines.push(`myshop_indexer_last_poll_at_ms ${indexer.lastPollAtMs}`);
+        if (indexer.lastSuccessAtMs != null) lines.push(`myshop_indexer_last_success_at_ms ${indexer.lastSuccessAtMs}`);
+        if (indexer.lastErrorAtMs != null) lines.push(`myshop_indexer_last_error_at_ms ${indexer.lastErrorAtMs}`);
         if (indexer.lastBackoffMs != null) lines.push(`myshop_indexer_last_backoff_ms ${indexer.lastBackoffMs}`);
         if (indexer.lastBackoffAtMs != null) lines.push(`myshop_indexer_last_backoff_at_ms ${indexer.lastBackoffAtMs}`);
         lines.push(`myshop_indexer_total_log_fetches ${indexer.totalLogFetches}`);
@@ -198,6 +225,14 @@ export async function startApiServer({ rpcUrl, chain, itemsAddress, port }) {
         lines.push(`myshop_indexer_persist_enabled ${indexer.persist.enabled ? 1 : 0}`);
         lines.push(`myshop_indexer_persist_errors ${indexer.persist.errors}`);
         if (indexer.persist.lastSavedAtMs != null) lines.push(`myshop_indexer_persist_last_saved_at_ms ${indexer.persist.lastSavedAtMs}`);
+
+        const paths = Array.from(stats.pathCounts.keys()).sort();
+        for (const p of paths) {
+          const safePath = String(p).replace(/[^a-zA-Z0-9_]/g, "_");
+          lines.push(`myshop_api_path_${safePath}_requests_total ${stats.pathCounts.get(p) ?? 0}`);
+          lines.push(`myshop_api_path_${safePath}_duration_ms_sum ${stats.pathDurationSumMs.get(p) ?? 0}`);
+          lines.push(`myshop_api_path_${safePath}_duration_ms_count ${stats.pathDurationCount.get(p) ?? 0}`);
+        }
 
         return _text(res, 200, `${lines.join("\n")}\n`);
       }
@@ -332,6 +367,17 @@ export async function startApiServer({ rpcUrl, chain, itemsAddress, port }) {
       return _json(res, 404, { ok: false, error: "not_found" });
     } catch (e) {
       return _json(res, 400, { ok: false, error: e instanceof Error ? e.message : String(e) });
+    } finally {
+      stats.requestsTotal += 1;
+      stats.pathCounts.set(pathName, (stats.pathCounts.get(pathName) ?? 0) + 1);
+
+      const durationMs = Date.now() - startedAtMs;
+      stats.pathDurationSumMs.set(pathName, (stats.pathDurationSumMs.get(pathName) ?? 0) + durationMs);
+      stats.pathDurationCount.set(pathName, (stats.pathDurationCount.get(pathName) ?? 0) + 1);
+
+      if (statusCode >= 200 && statusCode < 400) stats.okTotal += 1;
+      else if (statusCode >= 400 && statusCode < 500) stats.httpErrorTotal += 1;
+      else stats.internalErrorTotal += 1;
     }
   });
 
