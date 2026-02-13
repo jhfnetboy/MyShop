@@ -1920,6 +1920,24 @@ async function renderPurchasesPage(container, query = {}) {
       inputRow("fromBlock(optional)", "purchasesFromBlock", query.fromBlock || ""),
       inputRow("toBlock(optional)", "purchasesToBlock", query.toBlock || ""),
       el("div", {}, [el("label", { for: "purchasesSource", text: "source" }), sourceSelect]),
+      el("button", {
+        text: "Mine",
+        onclick: () => {
+          if (!connectedAddress) throw new Error("请先连接钱包");
+          document.getElementById("purchasesBuyer").value = connectedAddress;
+        }
+      }),
+      el("button", {
+        text: "Clear",
+        style: "margin-left: 8px;",
+        onclick: () => {
+          document.getElementById("purchasesBuyer").value = "";
+          document.getElementById("purchasesShopId").value = "";
+          document.getElementById("purchasesItemId").value = "";
+          document.getElementById("purchasesFromBlock").value = "";
+          document.getElementById("purchasesToBlock").value = "";
+        }
+      }),
       el("button", { text: "Load", onclick: () => load().catch(showTxError) })
     ])
   );

@@ -61,11 +61,16 @@
 **任务**
 
 - C1：定义并固化“页面 IA + 角色权限矩阵”，在 UI 上做硬性 gating
+  - 状态：已完成（协议后台仅对 protocol owner 可见/可进；店主后台对无权限钱包硬性拦截；Roles 页输出 pageAccess）
 - C2：错误与状态模型统一（前端把链上/Worker 错误映射成用户提示）
+  - 状态：已完成（统一 formatError/showTxError；429/网络/配置/权限/签名过期等都有 Fix 提示）
 - C3：广场与详情字段对齐（价格、库存/限购、时间窗、requiresSerial、action 类型）
+  - 状态：已完成（广场/店铺详情 item 列表与详情字段对齐，增加 nft/tokenURI 摘要）
 - C4：购买凭证与历史页（purchases 列表、筛选、交易链接、tokenId/serialHash 展示）
+  - 状态：已完成（purchases 列表可展开 Proof，并支持复制；保留 tx/link/tokenId/serialHash）
 - C5：交易生命周期体验完善（approve/buy 进度、pending、重试、失败引导）
 - C6：内置诊断与降级路径（RPC/链不匹配、Worker 不可用、429 限流提示、数据来源标识）
+  - 状态：已完成（诊断页可 check rpc/worker；广场展示 shops/items 数据来源统计；429 提示包含等待秒数）
 - C7：补齐全角色最小 E2E 自动化（基于 test_cases.md 的核心 happy+fail 集）
 
 **建议推进顺序（先定规则，再统一语义，再打磨路径，最后自动化固化）**
