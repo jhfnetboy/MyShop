@@ -1,11 +1,16 @@
+import { getDeploymentDefaults } from "./deployments.js";
+
 export function loadConfig() {
+  const deployment = import.meta.env.VITE_DEPLOYMENT ?? "";
+  const defaults = getDeploymentDefaults(deployment);
+
   const raw = {
-    rpcUrl: import.meta.env.VITE_RPC_URL,
-    chainId: import.meta.env.VITE_CHAIN_ID,
-    itemsAddress: import.meta.env.VITE_ITEMS_ADDRESS,
-    shopsAddress: import.meta.env.VITE_SHOPS_ADDRESS,
-    workerUrl: import.meta.env.VITE_WORKER_URL,
-    workerApiUrl: import.meta.env.VITE_WORKER_API_URL
+    rpcUrl: import.meta.env.VITE_RPC_URL ?? defaults.rpcUrl ?? "",
+    chainId: import.meta.env.VITE_CHAIN_ID ?? (defaults.chainId != null ? String(defaults.chainId) : ""),
+    itemsAddress: import.meta.env.VITE_ITEMS_ADDRESS ?? defaults.itemsAddress ?? "",
+    shopsAddress: import.meta.env.VITE_SHOPS_ADDRESS ?? defaults.shopsAddress ?? "",
+    workerUrl: import.meta.env.VITE_WORKER_URL ?? defaults.workerUrl ?? "",
+    workerApiUrl: import.meta.env.VITE_WORKER_API_URL ?? defaults.workerApiUrl ?? ""
   };
 
   const cfg = {
