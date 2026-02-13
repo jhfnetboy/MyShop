@@ -14,3 +14,5 @@ demo/indexer_state.json
 contracts/broadcast/
 contracts/cache/
 worker/data/
+frontend/test-results/
+frontend/playwright-report/
