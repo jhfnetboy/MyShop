@@ -163,21 +163,47 @@ class ApiError extends Error {
   }
 }
 
+function getErrorText(e) {
+  const parts = [];
+  const push = (v) => {
+    const s = String(v || "").trim();
+    if (!s) return;
+    if (parts.includes(s)) return;
+    parts.push(s);
+  };
+
+  if (e && typeof e === "object") {
+    if ("shortMessage" in e) push(e.shortMessage);
+    if ("details" in e) push(e.details);
+  }
+  if (e instanceof Error) push(e.message);
+  if (e && typeof e === "object" && "cause" in e) {
+    const c = e.cause;
+    if (c instanceof Error) push(c.message);
+    if (c && typeof c === "object") {
+      if ("shortMessage" in c) push(c.shortMessage);
+      if ("details" in c) push(c.details);
+    }
+  }
+  if (parts.length === 0) push(e);
+  return parts.join(" | ");
+}
+
 function formatError(e) {
-  const msg = e instanceof Error ? e.message : String(e);
+  const msg = getErrorText(e);
 
   if (e instanceof ApiError) {
     const code = e.errorCode || "api_error";
-    if (code === "deadline_expired") return `[${code}] deadline must be in the future (pick a later deadline)`;
-    if (code === "missing_param") return `[${code}] missing param: ${e.errorDetails?.param || "unknown"}`;
-    if (code === "invalid_param") return `[${code}] invalid param: ${e.errorDetails?.param || "unknown"}`;
-    if (code === "rate_limited") return `[${code}] too many requests, retry later`;
-    if (code === "signer_not_configured") return `[${code}] permit signer not configured on server`;
-    if (code === "serial_issuer_error") return `[${code}] serial issuer error`;
+    if (code === "deadline_expired") return `[${code}] permit deadline must be in the future\nFix: set deadline(ts) to a future time, then refetch permit`;
+    if (code === "missing_param") return `[${code}] missing param: ${e.errorDetails?.param || "unknown"}\nFix: fill the missing field and retry`;
+    if (code === "invalid_param") return `[${code}] invalid param: ${e.errorDetails?.param || "unknown"}\nFix: correct the value format and retry`;
+    if (code === "rate_limited") return `[${code}] too many requests\nFix: wait a bit and retry; reduce polling; consider switching data source to chain`;
+    if (code === "signer_not_configured") return `[${code}] permit signer not configured on server\nFix: configure WORKER_URL signer env and redeploy worker`;
+    if (code === "serial_issuer_error") return `[${code}] serial issuer error\nFix: retry; if persists, check worker logs and signer health`;
     if (code === "method_not_allowed") return `[${code}] method not allowed`;
-    if (code === "invalid_response") return `[${code}] invalid JSON response from server`;
-    if (code === "http_error" && e.status === 404) return `[${code}] endpoint not found (check URL/path)`;
-    if (code === "http_error" && e.status === 429) return `[${code}] too many requests, retry later`;
+    if (code === "invalid_response") return `[${code}] invalid JSON response from server\nFix: check WORKER_API_URL points to query server`;
+    if (code === "http_error" && e.status === 404) return `[${code}] endpoint not found\nFix: check WORKER_URL/WORKER_API_URL and path`;
+    if (code === "http_error" && e.status === 429) return `[${code}] too many requests\nFix: wait a bit and retry`;
     const meta = [];
     if (e.status) meta.push(`status=${e.status}`);
     if (e.url) meta.push(`url=${e.url}`);
@@ -185,21 +211,39 @@ function formatError(e) {
     return `[${code}]${suffix} ${msg}`;
   }
 
-  if (msg.includes("Missing window.ethereum")) return "[WalletMissing] missing wallet provider (install/enable wallet)";
-  if (msg.startsWith("Invalid address:")) return `[BadConfig] ${msg} (check Config)`;
-  if (msg.toLowerCase().includes("failed to fetch")) return "[NetworkError] network request failed (check RPC/Worker URL)";
-  if (msg.includes("SignatureExpired")) return "[SignatureExpired] permit signature expired; refetch extraData";
-  if (msg.includes("NonceUsed")) return "[NonceUsed] nonce already used; refetch extraData";
-  if (msg.includes("ShopPaused")) return "[ShopPaused] shop is paused";
-  if (msg.includes("ItemInactive")) return "[ItemInactive] item is inactive";
-  if (msg.toLowerCase().includes("user rejected")) return "[UserRejected] transaction rejected in wallet";
-  if (msg.toLowerCase().includes("insufficient funds")) return "[InsufficientFunds] insufficient ETH for gas";
+  if (msg.includes("Missing window.ethereum")) return "[WalletMissing] missing wallet provider\nFix: install/enable a wallet (e.g. MetaMask) and reload";
+  if (msg.startsWith("Invalid address:")) return `[BadConfig] ${msg}\nFix: open Config and paste a valid address`;
+  if (msg.toLowerCase().includes("failed to fetch")) return "[NetworkError] network request failed\nFix: check RPC_URL / WORKER_URL / WORKER_API_URL, then retry";
+  if (msg.includes("NotOwner")) return "[NoPermission] protocol owner required\nFix: connect the protocol owner wallet";
+  if (msg.includes("NotShopOwner")) return "[NoPermission] shop owner/operator required\nFix: connect shop owner wallet or grant role in Shop Console (S-04)";
+  if (msg.includes("InvalidRole")) return "[NoPermission] missing role\nFix: grant shop role in Shop Console (S-04) and retry";
+  if (msg.includes("SignatureExpired")) return "[SignatureExpired] permit signature expired\nFix: refetch permit (extraData) with a new future deadline";
+  if (msg.includes("InvalidSignature")) return "[InvalidSignature] permit signature invalid\nFix: refetch permit; ensure buyer/itemId/serial/deadline match";
+  if (msg.includes("NonceUsed")) return "[NonceUsed] nonce already used\nFix: refetch permit (extraData) to get a new nonce";
+  if (msg.includes("SerialRequired")) return "[SerialRequired] this item requires SerialPermit\nFix: click Fetch Serial Permit to generate extraData, then buy";
+  if (msg.includes("ActionNotAllowed")) return "[ActionNotAllowed] action not allowed\nFix: allow the action in Protocol Console (G-05), then retry";
+  if (msg.includes("ShopPaused")) return "[ShopPaused] shop is paused\nFix: unpause the shop (S-05 / governance), then retry";
+  if (msg.includes("ItemInactive")) return "[ItemInactive] item is inactive\nFix: activate the item (I-04), then retry";
+  if (msg.includes("ItemNotFound")) return "[ItemNotFound] itemId not found\nFix: check itemId in plaza/item detail";
+  if (msg.includes("ShopNotFound")) return "[ShopNotFound] shopId not found\nFix: check shopId in plaza/shop detail";
+  if (msg.includes("MaxItemsReached")) return "[SoldOut] max items reached\nFix: increase maxItems via new item or update policy";
+  if (msg.includes("InvalidAddress")) return "[InvalidAddress] invalid address\nFix: check address inputs and contract config";
+  if (msg.includes("InvalidPayment")) return "[InvalidPayment] invalid payment\nFix: check payToken, unitPrice, quantity, and ETH value/approval";
+  if (msg.includes("TransferFailed")) return "[TransferFailed] token transfer failed\nFix: ensure ERC20 balance + allowance are sufficient, then retry";
+  if (msg.toLowerCase().includes("insufficient allowance")) return "[InsufficientAllowance] ERC20 allowance too low\nFix: approve a larger amount, then buy again";
+  if (msg.toLowerCase().includes("exceeds balance") || msg.toLowerCase().includes("insufficient balance"))
+    return "[InsufficientBalance] insufficient token balance\nFix: top up token balance (or adjust quantity/price), then retry";
+  if (msg.toLowerCase().includes("user rejected")) return "[UserRejected] transaction rejected in wallet\nFix: confirm in wallet, or retry";
+  if (msg.toLowerCase().includes("insufficient funds")) return "[InsufficientFunds] insufficient ETH for gas\nFix: top up ETH for gas, then retry";
 
   return msg;
 }
 
 function showTxError(e) {
   const parts = [formatError(e)];
+  if (e && typeof e === "object" && "txHash" in e && e.txHash) {
+    parts.push(`\nTx: ${String(e.txHash)}`);
+  }
   const mismatch = getChainMismatch();
   if (mismatch) {
     parts.push(`\n[ChainMismatch] walletChainId=${mismatch.walletChainId} expectedChainId=${mismatch.expectedChainId}`);
@@ -219,6 +263,12 @@ async function runWriteTx({ label, buttonIds = [], write }) {
     const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: 120_000 });
     const blockNumber = receipt.blockNumber != null ? String(receipt.blockNumber) : "";
     setText("txOut", `[${label}] confirmed: ${hash}\nstatus=${receipt.status}${blockNumber ? ` block=${blockNumber}` : ""}`);
+    if (receipt.status !== "success") {
+      const err = new Error("[TxReverted] transaction reverted");
+      err.txHash = hash;
+      err.receipt = receipt;
+      throw err;
+    }
     return { hash, receipt };
   } finally {
     setDisabledMany(buttonIds, false);
@@ -615,18 +665,6 @@ async function getConnectedChainId() {
   } catch {
     return null;
   }
-}
-
-async function readShop() {
-  const shopId = BigInt(val("shopIdRead"));
-  const shopsAddress = requireAddress(val("shopsAddress"), "shopsAddress");
-  const shop = await publicClient.readContract({
-    address: shopsAddress,
-    abi: myShopsAbi,
-    functionName: "shops",
-    args: [shopId]
-  });
-  setText("shopOut", JSON.stringify(shop, null, 2));
 }
 
 async function readItem() {
