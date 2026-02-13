@@ -45,6 +45,13 @@ pnpm run dev
   - `RISK_SIGNER_PRIVATE_KEY`（用于 `/risk-allowance`）
   - `RISK_SIGNER_PRIVATE_KEY_FILE`（推荐：从文件读取私钥）
   - `SERIAL_ISSUER_URL`（可选：让服务端先向外部系统申请串号/哈希，再回签）
+  - `PERMIT_RATE_LIMIT=0|1`（默认开启：1）
+  - `PERMIT_RATE_LIMIT_WINDOW_MS`（默认 60000）
+  - `PERMIT_RATE_LIMIT_MAX`（默认 120）
+  - `PERMIT_RATE_LIMIT_MAX_BUCKETS`（默认 5000）
+  - `PERMIT_MAX_NONCE`（默认 1000000）
+  - `PERMIT_MAX_SERIAL_LENGTH`（默认 128）
+  - `PERMIT_MAX_CONTEXT_LENGTH`（默认 256）
 - **聚合查询 API（可选）**
   - `ENABLE_API=1`
   - `API_PORT`（默认 8788）
@@ -70,8 +77,17 @@ pnpm run dev
   - 填：用你提供的 nonce
 
 返回里会给出：
+
 - `signature`（EIP-712 签名）
 - `extraData`（已编码好的 `abi.encode(serialHash,deadline,nonce,sig)`，可直接作为 `buy(..., extraData)` 参数）
+
+#### 限流
+
+对 `/serial-permit` 与 `/risk-allowance` 默认启用按 `IP + 路径` 的滑动窗口限流，触发时：
+
+- HTTP 429（`errorCode=rate_limited`）
+- `Retry-After` 响应头（秒）
+- 返回 JSON 带 `retryAfterMs`
 
 #### 外部串号签发（可选）
 
@@ -166,7 +182,7 @@ MODE=both ENABLE_API=1 RPC_URL=http://127.0.0.1:8545 CHAIN_ID=31337 ITEMS_ADDRES
 
 `GET /indexer`
 
-查看索引状态（`lastIndexedBlock` / `cachedPurchases`）。
+查看索引状态与可观测指标（如 `lastIndexedBlock` / `lagBlocks` / `consecutiveErrors` / `lastError` / `lastErrorKind` / `totalBackoffs` / `lastRecoveryAtMs` / `cachedPurchases` 等）。
 
 ### shop
 

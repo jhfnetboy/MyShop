@@ -1,5 +1,17 @@
 # MyShop
 
+一个“链上协议 + 轻服务”的最小可用电商/门票/权益售卖系统：
+
+- **On-chain**：`MyShops`（店铺注册与协议配置）+ `MyShopItems`（上架与原子购买 `buy()`）
+- **Worker**：Purchased 监听、Permit 签名 API（SerialPermit / RiskAllowance）、Query API（shops/items/purchases + 内存索引）
+- **Frontend**：广场 / 买家入口 / 店主后台 / 协议后台 + 诊断页
+
+常用入口：
+
+- 里程碑与任务：[docs/milestones.md](docs/milestones.md)
+- 可执行用例清单：[docs/test_cases.md](docs/test_cases.md)
+- Worker 使用说明（含 /metrics 与 /indexer）：[docs/worker.md](docs/worker.md)
+
 ## 系统架构图
 
 ```mermaid

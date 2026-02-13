@@ -8,9 +8,10 @@ import { createPublicClient, createWalletClient } from "viem";
 import { myShopItemsAbi } from "./abi.js";
 
 class RateLimitError extends Error {
-  constructor(message = "rate_limited") {
+  constructor({ message = "rate_limited", retryAfterMs = null } = {}) {
     super(message);
     this.name = "RateLimitError";
+    this.retryAfterMs = retryAfterMs;
   }
 }
 
@@ -262,7 +263,19 @@ export async function startPermitServer({
     } catch (e) {
       if (e instanceof RateLimitError) {
         stats.rateLimitedTotal += 1;
-        _json(res, 429, { ok: false, error: "rate_limited", errorCode: "rate_limited" });
+        const retryAfterMs = typeof e.retryAfterMs === "number" ? e.retryAfterMs : null;
+        const retryAfterSec = retryAfterMs != null ? Math.max(1, Math.ceil(retryAfterMs / 1000)) : null;
+        _json(
+          res,
+          429,
+          {
+            ok: false,
+            error: "rate_limited",
+            errorCode: "rate_limited",
+            retryAfterMs
+          },
+          retryAfterSec != null ? { "retry-after": String(retryAfterSec) } : {}
+        );
         return;
       }
       if (e instanceof HttpError) {
@@ -307,12 +320,13 @@ function _get(url, key) {
   return value;
 }
 
-function _json(res, status, obj) {
+function _json(res, status, obj, extraHeaders = {}) {
   res.writeHead(status, {
     "content-type": "application/json",
     "access-control-allow-origin": "*",
     "access-control-allow-methods": "GET,POST,OPTIONS",
-    "access-control-allow-headers": "content-type"
+    "access-control-allow-headers": "content-type",
+    ...extraHeaders
   });
   res.end(JSON.stringify(obj));
 }
@@ -422,7 +436,11 @@ function _rateLimitOrThrow({ req, url, limiter }) {
   while (keepFrom < ts.length && ts[keepFrom] < cutoff) keepFrom++;
   if (keepFrom > 0) ts.splice(0, keepFrom);
 
-  if (ts.length >= limiter.max) throw new RateLimitError();
+  if (ts.length >= limiter.max) {
+    const oldest = ts.length ? ts[0] : now;
+    const retryAfterMs = Math.max(1, oldest + limiter.windowMs - now);
+    throw new RateLimitError({ retryAfterMs });
+  }
   ts.push(now);
 }
 
