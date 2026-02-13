@@ -2,19 +2,30 @@ import { getAddress } from "viem";
 import fs from "node:fs";
 
 import { optionalEnv, requireEnv } from "./env.js";
+import { getDeploymentDefaults } from "../../frontend/src/deployments.js";
 import { startApiServer } from "./apiServer.js";
 import { startPermitServer } from "./permitServer.js";
 import { watchPurchased } from "./watchPurchased.js";
 
 const mode = optionalEnv("MODE", "both");
 
-const rpcUrl = requireEnv("RPC_URL");
-const chainId = Number(requireEnv("CHAIN_ID"));
-const itemsAddress = getAddress(requireEnv("ITEMS_ADDRESS"));
+const deployment = optionalEnv("DEPLOYMENT", "");
+const defaults = getDeploymentDefaults(deployment);
+
+const rpcUrl = optionalEnv("RPC_URL", defaults.rpcUrl ?? "");
+if (!rpcUrl) throw new Error("Missing env: RPC_URL (or set DEPLOYMENT)");
+
+const chainIdRaw = optionalEnv("CHAIN_ID", defaults.chainId != null ? String(defaults.chainId) : "");
+if (!chainIdRaw) throw new Error("Missing env: CHAIN_ID (or set DEPLOYMENT)");
+const chainId = Number(chainIdRaw);
+
+const itemsAddressRaw = optionalEnv("ITEMS_ADDRESS", defaults.itemsAddress ?? "");
+if (!itemsAddressRaw) throw new Error("Missing env: ITEMS_ADDRESS (or set DEPLOYMENT)");
+const itemsAddress = getAddress(itemsAddressRaw);
 
 const chain = {
   id: chainId,
-  name: optionalEnv("CHAIN_NAME", "custom"),
+  name: optionalEnv("CHAIN_NAME", defaults.chainId === 31337 ? "anvil" : "custom"),
   nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
   rpcUrls: { default: { http: [rpcUrl] } }
 };
