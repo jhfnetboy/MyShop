@@ -22,11 +22,11 @@
 - A1：维护全角色 E2E 用例文档，并持续更新（入口、命令模板、期望）
   - 状态：已完成（见 docs/test_cases.md）
 - A2：把关键用例脚本化（demo_local + buy + query 验证），形成回归入口
-  - 状态：已开始（见 scripts/regression_local.sh）
+  - 状态：已完成（见 scripts/regression_local.sh / flow-test.sh）
 - A3：补齐失败用例的自动化验证（nonce 重放、deadline 过期、权限不足、暂停/下架）
-  - 状态：已开始（见 scripts/regression_local.sh）
+  - 状态：已完成（见 scripts/regression_local.sh）
 - A4：把回归命令写进顶层脚本与文档，形成统一的“测试脚本清单”
-  - 状态：进行中（优先在 docs/test_cases.md 固化入口）
+  - 状态：已完成（入口已在 docs/test_cases.md / README.md 固化）
 
 ## 2. Milestone B：Worker 产品化（让“轻服务”可运行、可恢复、可观测）
 
@@ -39,13 +39,13 @@
 **任务**
 
 - B1：实现 purchases 持久化（本地 sqlite/kv 任选其一），并支持重启恢复
-  - 状态：已开始（Worker /indexer 已暴露 persist 状态）
+  - 状态：已完成（默认启用 JSON KV：data/indexer.<chainId>.<items>.json；重启可恢复）
 - B2：实现 indexer 的重放/去重策略规范化（lookback、key 规则、最大缓存上限）
-  - 状态：已开始（重启会按 replayLookbackBlocks 回放并用 txHash:logIndex 去重）
+  - 状态：已完成（replayLookbackBlocks 回放 + txHash:logIndex 去重 + reorgLookbackBlocks 回滚 + dedupeWindowBlocks 窗口裁剪）
 - B3：增加 /metrics 或扩展 /indexer 输出（错误计数、最近一次错误、重连状态）
-  - 状态：已开始（/indexer + /metrics 已输出 lagBlocks、lastError、consecutiveErrors 等；后续补齐重连细节）
+  - 状态：已完成（/indexer + /metrics 已输出 lagBlocks / lastError / consecutiveErrors / reconnectCount 等）
 - B4：Permit API 限流与滥用防护（最小可行：按 IP/路径的滑动窗口）
-  - 状态：已开始（Permit Server 增加 429 rate_limited + 参数校验 errorCode；可通过 env 调整阈值）
+  - 状态：已完成（默认开启；429 返回 errorCode=rate_limited + Retry-After；可通过 env 调整阈值）
 - B5：签名密钥治理文档（托管/轮换/隔离资金权限/审计流程）
 
 ## 3. Milestone C：前端流程打磨（让“入口齐全”变成“体验可用”）
