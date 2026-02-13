@@ -43,12 +43,16 @@ export async function startApiServer({ rpcUrl, chain, itemsAddress, port }) {
     lastSuccessAtMs: null,
     lastErrorAtMs: null,
     lastError: null,
+    lastErrorKind: null,
     lastBackoffAtMs: null,
     lastBackoffMs: null,
     consecutiveErrors: 0,
     totalPolls: 0,
     totalErrors: 0,
+    totalBackoffs: 0,
+    totalBackoffMs: 0,
     recoveredFromErrorCount: 0,
+    lastRecoveryAtMs: null,
     lastRangeFromBlock: null,
     lastRangeToBlock: null,
     lastLogsCount: null,
@@ -163,12 +167,16 @@ export async function startApiServer({ rpcUrl, chain, itemsAddress, port }) {
           lastSuccessAtMs: indexer.lastSuccessAtMs,
           lastErrorAtMs: indexer.lastErrorAtMs,
           lastError: indexer.lastError,
+          lastErrorKind: indexer.lastErrorKind,
           lastBackoffAtMs: indexer.lastBackoffAtMs,
           lastBackoffMs: indexer.lastBackoffMs,
           consecutiveErrors: indexer.consecutiveErrors,
           totalPolls: indexer.totalPolls,
           totalErrors: indexer.totalErrors,
+          totalBackoffs: indexer.totalBackoffs,
+          totalBackoffMs: indexer.totalBackoffMs,
           recoveredFromErrorCount: indexer.recoveredFromErrorCount,
+          lastRecoveryAtMs: indexer.lastRecoveryAtMs,
           lastRangeFromBlock: indexer.lastRangeFromBlock?.toString() ?? null,
           lastRangeToBlock: indexer.lastRangeToBlock?.toString() ?? null,
           lastLogsCount: indexer.lastLogsCount,
@@ -208,11 +216,16 @@ export async function startApiServer({ rpcUrl, chain, itemsAddress, port }) {
         lines.push(`myshop_indexer_total_polls ${indexer.totalPolls}`);
         lines.push(`myshop_indexer_total_errors ${indexer.totalErrors}`);
         lines.push(`myshop_indexer_recovered_from_error_count ${indexer.recoveredFromErrorCount}`);
+        lines.push(`myshop_indexer_total_backoffs ${indexer.totalBackoffs}`);
+        lines.push(`myshop_indexer_total_backoff_ms_sum ${indexer.totalBackoffMs}`);
         if (indexer.lastPollAtMs != null) lines.push(`myshop_indexer_last_poll_at_ms ${indexer.lastPollAtMs}`);
         if (indexer.lastSuccessAtMs != null) lines.push(`myshop_indexer_last_success_at_ms ${indexer.lastSuccessAtMs}`);
         if (indexer.lastErrorAtMs != null) lines.push(`myshop_indexer_last_error_at_ms ${indexer.lastErrorAtMs}`);
         if (indexer.lastBackoffMs != null) lines.push(`myshop_indexer_last_backoff_ms ${indexer.lastBackoffMs}`);
         if (indexer.lastBackoffAtMs != null) lines.push(`myshop_indexer_last_backoff_at_ms ${indexer.lastBackoffAtMs}`);
+        if (indexer.lastRecoveryAtMs != null) lines.push(`myshop_indexer_last_recovery_at_ms ${indexer.lastRecoveryAtMs}`);
+        lines.push(`myshop_indexer_last_error_kind_tip ${indexer.lastErrorKind === "tip" ? 1 : 0}`);
+        lines.push(`myshop_indexer_last_error_kind_logs ${indexer.lastErrorKind === "logs" ? 1 : 0}`);
         lines.push(`myshop_indexer_total_log_fetches ${indexer.totalLogFetches}`);
         lines.push(`myshop_indexer_total_logs ${indexer.totalLogs}`);
         if (indexer.lastLogsCount != null) lines.push(`myshop_indexer_last_logs_count ${indexer.lastLogsCount}`);
@@ -725,6 +738,8 @@ async function _sleepBackoff(indexer) {
   const ms = _backoffMs(indexer);
   indexer.lastBackoffMs = ms;
   indexer.lastBackoffAtMs = Date.now();
+  indexer.totalBackoffs += 1;
+  indexer.totalBackoffMs += ms;
   await new Promise((r) => setTimeout(r, ms));
 }
 
@@ -750,7 +765,7 @@ async function _startIndexer({ client, chainId, itemsAddress, cache, indexer }) 
     try {
       tip = await client.getBlockNumber();
     } catch (e) {
-      _markIndexerError(indexer, e);
+      _markIndexerError(indexer, "tip", e);
       await _sleepBackoff(indexer);
       continue;
     }
@@ -769,7 +784,10 @@ async function _startIndexer({ client, chainId, itemsAddress, cache, indexer }) 
     const toBlock = tip;
 
     if (fromBlock > toBlock) {
-      if (indexer.consecutiveErrors > 0) indexer.recoveredFromErrorCount += 1;
+      if (indexer.consecutiveErrors > 0) {
+        indexer.recoveredFromErrorCount += 1;
+        indexer.lastRecoveryAtMs = Date.now();
+      }
       indexer.lastSuccessAtMs = Date.now();
       indexer.consecutiveErrors = 0;
       await new Promise((r) => setTimeout(r, indexer.pollIntervalMs));
@@ -789,7 +807,7 @@ async function _startIndexer({ client, chainId, itemsAddress, cache, indexer }) 
           toBlock
         });
       } catch (e) {
-        _markIndexerError(indexer, e);
+        _markIndexerError(indexer, "logs", e);
         await _sleepBackoff(indexer);
         continue;
       }
@@ -813,7 +831,10 @@ async function _startIndexer({ client, chainId, itemsAddress, cache, indexer }) 
       indexer.lastIndexedBlock = toBlock;
       _trimPurchasesToWindow(indexer);
       _schedulePersistIndexerState({ indexer, chainId, itemsAddress });
-      if (indexer.consecutiveErrors > 0) indexer.recoveredFromErrorCount += 1;
+      if (indexer.consecutiveErrors > 0) {
+        indexer.recoveredFromErrorCount += 1;
+        indexer.lastRecoveryAtMs = Date.now();
+      }
       indexer.lastSuccessAtMs = Date.now();
       indexer.consecutiveErrors = 0;
     }
@@ -824,11 +845,12 @@ async function _startIndexer({ client, chainId, itemsAddress, cache, indexer }) 
   indexer.running = false;
 }
 
-function _markIndexerError(indexer, e) {
+function _markIndexerError(indexer, kind, e) {
   indexer.totalErrors += 1;
   indexer.consecutiveErrors += 1;
   indexer.lastErrorAtMs = Date.now();
   indexer.lastError = e instanceof Error ? e.message : String(e);
+  indexer.lastErrorKind = kind;
 }
 
 function _backoffMs(indexer) {
