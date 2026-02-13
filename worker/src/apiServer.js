@@ -177,6 +177,8 @@ export async function startApiServer({ rpcUrl, chain, itemsAddress, port }) {
           totalBackoffMs: indexer.totalBackoffMs,
           recoveredFromErrorCount: indexer.recoveredFromErrorCount,
           lastRecoveryAtMs: indexer.lastRecoveryAtMs,
+          reconnectCount: indexer.recoveredFromErrorCount,
+          lastReconnectAtMs: indexer.lastRecoveryAtMs,
           lastRangeFromBlock: indexer.lastRangeFromBlock?.toString() ?? null,
           lastRangeToBlock: indexer.lastRangeToBlock?.toString() ?? null,
           lastLogsCount: indexer.lastLogsCount,
@@ -216,6 +218,7 @@ export async function startApiServer({ rpcUrl, chain, itemsAddress, port }) {
         lines.push(`myshop_indexer_total_polls ${indexer.totalPolls}`);
         lines.push(`myshop_indexer_total_errors ${indexer.totalErrors}`);
         lines.push(`myshop_indexer_recovered_from_error_count ${indexer.recoveredFromErrorCount}`);
+        lines.push(`myshop_indexer_reconnect_count ${indexer.recoveredFromErrorCount}`);
         lines.push(`myshop_indexer_total_backoffs ${indexer.totalBackoffs}`);
         lines.push(`myshop_indexer_total_backoff_ms_sum ${indexer.totalBackoffMs}`);
         if (indexer.lastPollAtMs != null) lines.push(`myshop_indexer_last_poll_at_ms ${indexer.lastPollAtMs}`);
@@ -224,6 +227,7 @@ export async function startApiServer({ rpcUrl, chain, itemsAddress, port }) {
         if (indexer.lastBackoffMs != null) lines.push(`myshop_indexer_last_backoff_ms ${indexer.lastBackoffMs}`);
         if (indexer.lastBackoffAtMs != null) lines.push(`myshop_indexer_last_backoff_at_ms ${indexer.lastBackoffAtMs}`);
         if (indexer.lastRecoveryAtMs != null) lines.push(`myshop_indexer_last_recovery_at_ms ${indexer.lastRecoveryAtMs}`);
+        if (indexer.lastRecoveryAtMs != null) lines.push(`myshop_indexer_last_reconnect_at_ms ${indexer.lastRecoveryAtMs}`);
         lines.push(`myshop_indexer_last_error_kind_tip ${indexer.lastErrorKind === "tip" ? 1 : 0}`);
         lines.push(`myshop_indexer_last_error_kind_logs ${indexer.lastErrorKind === "logs" ? 1 : 0}`);
         lines.push(`myshop_indexer_total_log_fetches ${indexer.totalLogFetches}`);
