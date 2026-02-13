@@ -149,6 +149,33 @@ function formatPayToken(payToken) {
   return shortHex(payToken);
 }
 
+function shortText(s, maxLen = 48) {
+  const str = String(s || "");
+  if (str.length <= maxLen) return str;
+  const head = Math.max(0, Math.floor((maxLen - 3) / 2));
+  const tail = Math.max(0, maxLen - 3 - head);
+  return `${str.slice(0, head)}...${str.slice(str.length - tail)}`;
+}
+
+function formatItemSummary(item, { includeShopId } = {}) {
+  const actionLabel = item.action && !isZeroAddress(item.action) ? shortHex(item.action) : "none";
+  const nftLabel = item.nftContract && !isZeroAddress(item.nftContract) ? shortHex(item.nftContract) : "none";
+  const tokenUriLabel = item.tokenURI ? shortText(item.tokenURI, 36) : "";
+  const shopPart = includeShopId ? ` shopId=${item.shopId}` : "";
+  const tokenUriPart = tokenUriLabel ? ` tokenURI=${tokenUriLabel}` : "";
+  return ` src=${item.__source || ""}${shopPart} active=${item.active} payToken=${formatPayToken(item.payToken)} unitPrice=${item.unitPrice} requiresSerial=${item.requiresSerial} soulbound=${item.soulbound} action=${actionLabel} nft=${nftLabel}${tokenUriPart}`;
+}
+
+function sourceCountsLabel(list, getSource) {
+  const counts = new Map();
+  for (const it of list || []) {
+    const s = String(getSource(it) || "unknown");
+    counts.set(s, (counts.get(s) || 0) + 1);
+  }
+  const keys = Array.from(counts.keys()).sort();
+  return keys.map((k) => `${k}=${counts.get(k)}`).join(" ");
+}
+
 function explorerBaseUrl(chainId) {
   const id = Number(chainId);
   if (id === 1) return "https://etherscan.io";
@@ -1568,6 +1595,15 @@ async function renderPlaza(container) {
     const shopsById = new Map();
     for (const s of shops) shopsById.set(String(s.shopId), s.shop);
 
+    listBox.appendChild(
+      el("div", {
+        text: `loaded: shops(${shops.length}) ${sourceCountsLabel(shops, (s) => s?.shop?.__source)} items(${items.length}) ${sourceCountsLabel(
+          items,
+          (it) => it?.item?.__source
+        )}`
+      })
+    );
+
     const shopsEl = el("div", {}, [el("h3", { text: `Shops (${shops.length})` })]);
     for (const s of shops) {
       const shop = s.shop;
@@ -1589,12 +1625,11 @@ async function renderPlaza(container) {
     for (const it of items) {
       const item = it.item;
       const shop = shopsById.get(String(item.shopId));
-      const actionLabel = item.action && !isZeroAddress(item.action) ? shortHex(item.action) : "none";
       itemsEl.appendChild(
         el("div", {}, [
           el("a", { href: `#/item/${it.itemId}`, text: `Item #${it.itemId}` }),
           el("span", {
-            text: ` src=${item.__source || ""} shopId=${item.shopId} active=${item.active} payToken=${formatPayToken(item.payToken)} unitPrice=${item.unitPrice} requiresSerial=${item.requiresSerial} soulbound=${item.soulbound} action=${actionLabel}`
+            text: formatItemSummary(item, { includeShopId: true })
           }),
           shop ? el("span", {}, [el("span", { text: " shopOwner=" }), addressNode(shop.owner)]) : el("span", { text: "" }),
           el("button", {
@@ -1654,14 +1689,14 @@ async function renderShopDetail(container, shopId) {
       setText("txOut", "shop items: 0");
       return;
     }
+    list.appendChild(el("div", { text: `loaded: items(${filtered.length}) ${sourceCountsLabel(filtered, (it) => it?.item?.__source)}` }));
     for (const it of filtered) {
       const item = it.item;
-      const actionLabel = item.action && !isZeroAddress(item.action) ? shortHex(item.action) : "none";
       list.appendChild(
         el("div", {}, [
           el("a", { href: `#/item/${it.itemId}`, text: `Item #${it.itemId}` }),
           el("span", {
-            text: ` src=${item.__source || ""} active=${item.active} payToken=${formatPayToken(item.payToken)} unitPrice=${item.unitPrice} requiresSerial=${item.requiresSerial} soulbound=${item.soulbound} action=${actionLabel}`
+            text: formatItemSummary(item, { includeShopId: false })
           })
         ])
       );
