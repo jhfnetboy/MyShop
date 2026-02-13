@@ -92,6 +92,80 @@
 - D3：SDK 整合（MyShop client + 角色体系对齐 + 地址源）
 - D4：发布流程文档（版本号、变更日志、回滚策略）
 
+### D4：发布流程（Release Playbook）
+
+目标：让每次“发布/上线/回滚”都有一致的步骤、可追踪的版本号、可复现的构建与验证。
+
+#### 版本号（Versioning）
+
+- 采用 SemVer：`vMAJOR.MINOR.PATCH`
+- 建议约定：
+  - `MAJOR`：合约接口/签名域/业务流程有破坏性变更（老前端/worker 不兼容）
+  - `MINOR`：新增功能/字段（兼容旧流程）
+  - `PATCH`：修 bug / 改体验 / 不影响接口兼容
+- 预发布（可选）：`vX.Y.Z-rc.N` 用于 staging 验证；通过后打正式 tag `vX.Y.Z`
+
+#### 变更日志（Changelog）
+
+- 每次发布都需要一份“可读的变更说明”，建议写在 GitHub Release Notes（或 PR 描述汇总）
+- 最小模板：
+  - **Contracts**：新增/变更的函数、事件、权限、签名域、部署地址版本
+  - **Worker**：permit/api/watch 的行为变化、限流/错误码/指标变化
+  - **Frontend**：新增入口、字段展示变化、错误提示变化
+  - **Ops**：环境变量新增/默认值变化、回归命令变化
+
+#### 发布前检查（Preflight）
+
+1. 确认地址/环境选择策略
+
+- 前端：用 `VITE_DEPLOYMENT`（或各项 `VITE_*`）确定 rpc/chainId/合约地址/worker url
+- Worker：用 `DEPLOYMENT`（或各项 `RPC_URL/CHAIN_ID/...`）确定链与地址
+- 原则：发布时优先用 “deployment + version” 来锁定地址版本，而不是靠人工复制粘贴
+
+2. 运行本地回归（与 CI 对齐）
+
+```bash
+./build-test-contracts.sh
+pnpm -C worker regression:worker
+pnpm -C frontend regression
+./scripts/regression_local.sh
+```
+
+#### 发布步骤（Release）
+
+1. 合约（Contracts）
+
+- 如果需要新部署：产出并固化“地址版本”（例如：`anvil@v1`、`sepolia@v1`）
+- 将新地址写入对应的地址源（目前在前端 `deployments.js` 做默认值；也可以完全由 env 覆盖）
+
+2. Worker
+
+- 按目标环境配置 env（RPC/CHAIN_ID/ITEMS_ADDRESS/SHOPS_ADDRESS 等）
+- 通过 smoke / regression 验证后部署到目标运行环境
+
+3. Frontend
+
+- 通过 `pnpm -C frontend build` 产出静态资源
+- 按环境设置 `VITE_DEPLOYMENT` 或 `VITE_*`，确保默认配置与目标地址版本一致
+
+4. 打 tag + 发布说明
+
+```bash
+git tag -a vX.Y.Z -m "MyShop vX.Y.Z"
+git push origin vX.Y.Z
+```
+
+#### 回滚策略（Rollback）
+
+- **前端/Worker 回滚**：回滚到上一个稳定 tag 对应的构建产物与环境变量（尤其是 `*_DEPLOYMENT` / 地址）
+- **合约回滚**：
+  - 已部署的新合约地址不可“撤销”，回滚的本质是“切回旧地址版本”（前端/worker 配置回指旧地址）
+  - 重要原则：旧地址版本必须长期可用，除非明确废弃并在变更说明中标记
+- 回滚执行建议：
+  - 先回滚前端（最小影响、最快）
+  - 再回滚 worker（避免 permit 行为不一致）
+  - 合约仅在必要时切换默认地址版本（并在 release notes 说明）
+
 ## 5. 本周建议推进顺序（最小风险）
 
 - 先做 A（回归与用例可执行）→ 再做 B（Worker 持久化/可观测）→ 再做 C（体验）→ 并行 D（CI/配置/SDK）
