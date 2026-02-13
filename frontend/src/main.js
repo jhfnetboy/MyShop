@@ -56,6 +56,7 @@ let connectedAddress = null;
 let connectedChainId = null;
 let walletEventsBound = false;
 let activeTxLabel = null;
+let lastTx = { label: null, hash: null, status: null, blockNumber: null };
 
 function setDisabledById(id, disabled) {
   const node = document.getElementById(id);
@@ -98,6 +99,21 @@ function val(id) {
 
 function setText(id, text) {
   document.getElementById(id).textContent = text;
+}
+
+function updateTxPanel() {
+  const panel = document.getElementById("txPanel");
+  if (!panel) return;
+  panel.innerHTML = "";
+  if (!activeTxLabel && !lastTx?.label) return;
+
+  const rows = [];
+  if (activeTxLabel) rows.push(el("div", { text: `activeTx=${activeTxLabel}` }));
+  if (lastTx?.label) rows.push(el("div", { text: `lastTxLabel=${lastTx.label}` }));
+  if (lastTx?.hash) rows.push(el("div", {}, [el("span", { text: "lastTx=" }), txLinkNode(lastTx.hash)]));
+  if (lastTx?.status)
+    rows.push(el("div", { text: `lastTxStatus=${lastTx.status}${lastTx.blockNumber ? ` block=${lastTx.blockNumber}` : ""}` }));
+  panel.appendChild(el("div", {}, [el("h3", { text: "Tx" }), ...rows]));
 }
 
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
@@ -276,18 +292,25 @@ function showTxError(e) {
     parts.push("Fix: switch your wallet network to expectedChainId, or update Config -> CHAIN_ID/RPC URL.");
   }
   setText("txOut", parts.join("\n"));
+  updateTxPanel();
 }
 
 async function runWriteTx({ label, buttonIds = [], write }) {
   if (activeTxLabel) throw new Error(`transaction in progress: ${activeTxLabel}`);
   activeTxLabel = label;
+  lastTx = { label, hash: null, status: "waiting_wallet", blockNumber: null };
+  updateTxPanel();
   setDisabledMany(buttonIds, true);
   try {
     setText("txOut", `[${label}] waiting for wallet confirmation...`);
     const hash = await write();
+    lastTx = { label, hash, status: "pending", blockNumber: null };
+    updateTxPanel();
     setText("txOut", `[${label}] submitted: ${hash}\nstatus=pending`);
     const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: 120_000 });
     const blockNumber = receipt.blockNumber != null ? String(receipt.blockNumber) : "";
+    lastTx = { label, hash, status: receipt.status, blockNumber: blockNumber || null };
+    updateTxPanel();
     setText("txOut", `[${label}] confirmed: ${hash}\nstatus=${receipt.status}${blockNumber ? ` block=${blockNumber}` : ""}`);
     if (receipt.status !== "success") {
       const err = new Error("[TxReverted] transaction reverted");
@@ -299,6 +322,7 @@ async function runWriteTx({ label, buttonIds = [], write }) {
   } finally {
     setDisabledMany(buttonIds, false);
     activeTxLabel = null;
+    updateTxPanel();
   }
 }
 
@@ -726,6 +750,13 @@ async function readItem() {
   });
   setText("itemOut", JSON.stringify(item, null, 2));
 
+  try {
+    const payToken = pick(item, "payToken", 1);
+    const buyPayToken = document.getElementById("buyPayToken");
+    if (buyPayToken && !String(buyPayToken.value || "").trim()) buyPayToken.value = payToken;
+  } catch {
+  }
+
   const tokenURI = pick(item, "tokenURI", 5);
   const metaUrl = toHttpUri(tokenURI);
   let metadata = null;
@@ -1127,6 +1158,10 @@ async function buy() {
         value: ethValue ? parseEther(ethValue) : undefined
       })
   });
+
+  window.location.hash = `#/purchases?buyer=${encodeURIComponent(connectedAddress)}&itemId=${encodeURIComponent(
+    itemId.toString()
+  )}&source=auto`;
 }
 
 async function setShopRolesTx() {
@@ -2466,7 +2501,9 @@ function render() {
   const main = el("div", { id: "main" });
   app.appendChild(main);
   app.appendChild(el("hr"));
+  app.appendChild(el("div", { id: "txPanel" }));
   app.appendChild(el("pre", { id: "txOut" }));
+  updateTxPanel();
 
   const route = getRoute();
 
