@@ -262,7 +262,11 @@ function formatError(e) {
 }
 
 function showTxError(e) {
-  const parts = [formatError(e)];
+  const base = formatError(e);
+  const parts = [base];
+  if (!base.includes("Fix:")) {
+    parts.push("\nFix: open 诊断（Diagnostics）检查 RPC/Worker，再检查 配置（Config）地址与 URL，然后重试。");
+  }
   if (e && typeof e === "object" && "txHash" in e && e.txHash) {
     parts.push(`\nTx: ${String(e.txHash)}`);
   }
@@ -349,8 +353,8 @@ function getApiBaseUrl() {
   return normalizeBaseUrl(val("workerApiUrl") || runtimeCfg.workerApiUrl || getPermitBaseUrl());
 }
 
-async function fetchJson(url) {
-  const res = await fetch(url);
+async function fetchJson(url, { signal } = {}) {
+  const res = await fetch(url, { signal });
   const body = await res.text();
   let parsed = null;
   try {
@@ -1403,6 +1407,8 @@ async function importShopItemsTx() {
 }
 
 let routeState = { buyerItemId: null };
+let lastServiceCheckAtMs = 0;
+let lastServiceStatusText = "";
 
 function getRoute() {
   const raw = window.location.hash || "#/plaza";
@@ -1419,6 +1425,16 @@ function getRoute() {
 
 function navLink(label, href) {
   return el("a", { href, text: label, style: "margin-right: 12px;" });
+}
+
+async function fetchJsonWithTimeout(url, timeoutMs) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetchJson(url, { signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function decodeShopRoles(rolesMask) {
@@ -2426,6 +2442,7 @@ function render() {
     el("button", { text: "Connect Wallet", onclick: () => connect().catch(showTxError) }),
     el("div", { id: "conn", text: connectedAddress ? `connected: ${connectedAddress}` : "not connected" }),
     el("div", { id: "roleSummary", text: "" }),
+    el("div", { id: "serviceSummary", text: "" }),
     mismatch
       ? el("div", {
           style: "color: #b45309;",
@@ -2467,6 +2484,43 @@ function render() {
         }
       } else {
         setText("roleSummary", "");
+      }
+
+      const now = Date.now();
+      const shouldRefreshService = now - lastServiceCheckAtMs > 5000;
+      if (lastServiceStatusText) setText("serviceSummary", lastServiceStatusText);
+      if (shouldRefreshService) {
+        lastServiceCheckAtMs = now;
+        (async () => {
+          const parts = [];
+          const permitBase = getPermitBaseUrl();
+          const apiBase = getApiBaseUrl();
+
+          if (permitBase) {
+            try {
+              await fetchJsonWithTimeout(new URL("/health", permitBase).toString(), 1500);
+              parts.push("permit=ok");
+            } catch {
+              parts.push("permit=down");
+            }
+          } else {
+            parts.push("permit=unset");
+          }
+
+          if (apiBase) {
+            try {
+              await fetchJsonWithTimeout(new URL("/health", apiBase).toString(), 1500);
+              parts.push("api=ok");
+            } catch {
+              parts.push("api=down");
+            }
+          } else {
+            parts.push("api=unset");
+          }
+
+          lastServiceStatusText = parts.join(" ");
+          setText("serviceSummary", lastServiceStatusText);
+        })();
       }
 
       if (route.parts.length === 0 || route.parts[0] === "plaza") {
