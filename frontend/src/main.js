@@ -1,7 +1,17 @@
 import { createPublicClient, createWalletClient, custom, decodeEventLog, getAddress, http, isAddress, parseAbiItem, parseEther } from "viem";
 
 import { loadConfig } from "./config.js";
-import { erc20Abi, myShopItemsAbi, myShopsAbi } from "./contracts.js";
+import {
+  createMyShopReadClient,
+  decodeShopRolesMask,
+  erc20Abi,
+  myShopItemsAbi,
+  myShopsAbi,
+  SHOP_ROLE_ITEM_ACTION_EDITOR,
+  SHOP_ROLE_ITEM_EDITOR,
+  SHOP_ROLE_ITEM_MAINTAINER,
+  SHOP_ROLE_SHOP_ADMIN
+} from "./contracts.js";
 
 const envCfg = loadConfig();
 const storageKey = "myshop_frontend_config_v1";
@@ -1473,12 +1483,7 @@ async function fetchJsonWithTimeout(url, timeoutMs) {
 }
 
 function decodeShopRoles(rolesMask) {
-  const labels = [];
-  if ((rolesMask & SHOP_ROLE_SHOP_ADMIN) !== 0) labels.push("shopAdmin(1)");
-  if ((rolesMask & SHOP_ROLE_ITEM_MAINTAINER) !== 0) labels.push("itemMaintainer(2)");
-  if ((rolesMask & SHOP_ROLE_ITEM_EDITOR) !== 0) labels.push("itemEditor(4)");
-  if ((rolesMask & SHOP_ROLE_ITEM_ACTION_EDITOR) !== 0) labels.push("itemActionEditor(8)");
-  return labels;
+  return decodeShopRolesMask(rolesMask).labels;
 }
 
 function applyConfigFromInputs() {
@@ -2208,60 +2213,26 @@ function getCurrentCfgValue(id) {
 }
 
 async function getProtocolOwners() {
-  const shopsAddressVal = getCurrentCfgValue("shopsAddress");
-  const itemsAddressVal = getCurrentCfgValue("itemsAddress");
-
-  const owners = { shopsOwner: null, itemsOwner: null };
-
-  if (isAddress(shopsAddressVal)) {
-    const o = await publicClient.readContract({
-      address: getAddress(shopsAddressVal),
-      abi: myShopsAbi,
-      functionName: "owner",
-      args: []
-    });
-    owners.shopsOwner = getAddress(o);
-  }
-
-  if (isAddress(itemsAddressVal)) {
-    const o = await publicClient.readContract({
-      address: getAddress(itemsAddressVal),
-      abi: myShopItemsAbi,
-      functionName: "owner",
-      args: []
-    });
-    owners.itemsOwner = getAddress(o);
-  }
-
-  return owners;
+  const myshop = createMyShopReadClient({
+    publicClient,
+    shopsAddress: getCurrentCfgValue("shopsAddress"),
+    itemsAddress: getCurrentCfgValue("itemsAddress")
+  });
+  return myshop.getProtocolOwners();
 }
 
-const SHOP_ROLE_SHOP_ADMIN = 1;
-const SHOP_ROLE_ITEM_MAINTAINER = 2;
-const SHOP_ROLE_ITEM_EDITOR = 4;
-const SHOP_ROLE_ITEM_ACTION_EDITOR = 8;
-
 async function getShopAccess({ shopId, actor }) {
-  const shopsAddressVal = requireAddress(getCurrentCfgValue("shopsAddress"), "shopsAddress");
-  const owners = await getProtocolOwners();
-
-  const shop = await publicClient.readContract({
-    address: shopsAddressVal,
-    abi: myShopsAbi,
-    functionName: "shops",
-    args: [shopId]
+  requireAddress(getCurrentCfgValue("shopsAddress"), "shopsAddress");
+  const myshop = createMyShopReadClient({
+    publicClient,
+    shopsAddress: getCurrentCfgValue("shopsAddress"),
+    itemsAddress: getCurrentCfgValue("itemsAddress")
   });
 
-  const shopOwner = getAddress(pick(shop, "owner", 0));
-  const roles = await publicClient.readContract({
-    address: shopsAddressVal,
-    abi: myShopsAbi,
-    functionName: "shopRoles",
-    args: [shopId, actor]
-  });
-
-  const rolesMask = Number(BigInt(roles));
-  const isProtocolOwner = (owners.shopsOwner && owners.shopsOwner === actor) || (owners.itemsOwner && owners.itemsOwner === actor);
+  const owners = await myshop.getProtocolOwners();
+  const shopOwner = await myshop.getShopOwner(shopId);
+  const rolesMask = await myshop.getShopRolesMask(shopId, actor);
+  const isProtocolOwner = myshop.isProtocolOwner(owners, actor);
   const isShopOwner = shopOwner === actor;
 
   return { isProtocolOwner, isShopOwner, rolesMask, shopOwner };

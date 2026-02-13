@@ -1,3 +1,5 @@
+import { getAddress, isAddress } from "viem";
+
 export const myShopsAbi = [
   {
     type: "function",
@@ -408,3 +410,96 @@ export const erc20Abi = [
     outputs: [{ name: "", type: "bool" }]
   }
 ];
+
+export const SHOP_ROLE_SHOP_ADMIN = 1;
+export const SHOP_ROLE_ITEM_MAINTAINER = 2;
+export const SHOP_ROLE_ITEM_EDITOR = 4;
+export const SHOP_ROLE_ITEM_ACTION_EDITOR = 8;
+
+export function decodeShopRolesMask(rolesMask) {
+  const mask = Number(rolesMask ?? 0);
+  const labels = [];
+  if ((mask & SHOP_ROLE_SHOP_ADMIN) !== 0) labels.push("shopAdmin(1)");
+  if ((mask & SHOP_ROLE_ITEM_MAINTAINER) !== 0) labels.push("itemMaintainer(2)");
+  if ((mask & SHOP_ROLE_ITEM_EDITOR) !== 0) labels.push("itemEditor(4)");
+  if ((mask & SHOP_ROLE_ITEM_ACTION_EDITOR) !== 0) labels.push("itemActionEditor(8)");
+  return {
+    rolesMask: mask,
+    labels,
+    isShopAdmin: (mask & SHOP_ROLE_SHOP_ADMIN) !== 0,
+    isItemMaintainer: (mask & SHOP_ROLE_ITEM_MAINTAINER) !== 0,
+    isItemEditor: (mask & SHOP_ROLE_ITEM_EDITOR) !== 0,
+    isItemActionEditor: (mask & SHOP_ROLE_ITEM_ACTION_EDITOR) !== 0
+  };
+}
+
+export function createMyShopReadClient({ publicClient, shopsAddress, itemsAddress }) {
+  const shops = isAddress(shopsAddress) ? getAddress(shopsAddress) : null;
+  const items = isAddress(itemsAddress) ? getAddress(itemsAddress) : null;
+
+  async function getProtocolOwners() {
+    const owners = { shopsOwner: null, itemsOwner: null };
+
+    if (shops) {
+      const o = await publicClient.readContract({
+        address: shops,
+        abi: myShopsAbi,
+        functionName: "owner",
+        args: []
+      });
+      owners.shopsOwner = getAddress(o);
+    }
+
+    if (items) {
+      const o = await publicClient.readContract({
+        address: items,
+        abi: myShopItemsAbi,
+        functionName: "owner",
+        args: []
+      });
+      owners.itemsOwner = getAddress(o);
+    }
+
+    return owners;
+  }
+
+  function isProtocolOwner(owners, actor) {
+    const a = actor ? getAddress(actor) : null;
+    if (!a) return false;
+    return (owners?.shopsOwner && owners.shopsOwner === a) || (owners?.itemsOwner && owners.itemsOwner === a);
+  }
+
+  async function getShopOwner(shopId) {
+    if (!shops) throw new Error("Invalid shopsAddress");
+    const shop = await publicClient.readContract({
+      address: shops,
+      abi: myShopsAbi,
+      functionName: "shops",
+      args: [shopId]
+    });
+    const rawOwner = shop && typeof shop === "object" ? (shop.owner ?? shop[0]) : null;
+    if (!rawOwner) throw new Error("Invalid shops() response");
+    return getAddress(rawOwner);
+  }
+
+  async function getShopRolesMask(shopId, actor) {
+    if (!shops) throw new Error("Invalid shopsAddress");
+    const a = getAddress(actor);
+    const roles = await publicClient.readContract({
+      address: shops,
+      abi: myShopsAbi,
+      functionName: "shopRoles",
+      args: [shopId, a]
+    });
+    return Number(BigInt(roles));
+  }
+
+  return {
+    shopsAddress: shops,
+    itemsAddress: items,
+    getProtocolOwners,
+    isProtocolOwner,
+    getShopOwner,
+    getShopRolesMask
+  };
+}
