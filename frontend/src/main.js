@@ -356,7 +356,7 @@ async function fetchShop(shopId) {
   const id = BigInt(shopId);
   try {
     const json = await workerApiGet("/shop", { shopId: id.toString() });
-    if (json?.shop) return json.shop;
+    if (json?.shop) return { ...json.shop, __source: "worker" };
     throw new Error("invalid worker response");
   } catch {
     const shopsAddress = await resolveShopsAddress();
@@ -370,7 +370,8 @@ async function fetchShop(shopId) {
       owner: pick(raw, "owner", 0),
       treasury: pick(raw, "treasury", 1),
       metadataHash: pick(raw, "metadataHash", 2),
-      paused: pick(raw, "paused", 3)
+      paused: pick(raw, "paused", 3),
+      __source: "chain"
     };
   }
 }
@@ -379,7 +380,7 @@ async function fetchItem(itemId) {
   const id = BigInt(itemId);
   try {
     const json = await workerApiGet("/item", { itemId: id.toString() });
-    if (json?.item) return json.item;
+    if (json?.item) return { ...json.item, __source: "worker" };
     throw new Error("invalid worker response");
   } catch {
     const itemsAddressVal = val("itemsAddress") || runtimeCfg.itemsAddress;
@@ -400,7 +401,8 @@ async function fetchItem(itemId) {
       action: pick(raw, "action", 6),
       actionData: pick(raw, "actionData", 7),
       requiresSerial: pick(raw, "requiresSerial", 8),
-      active: pick(raw, "active", 9)
+      active: pick(raw, "active", 9),
+      __source: "chain"
     };
   }
 }
@@ -408,7 +410,15 @@ async function fetchItem(itemId) {
 async function fetchShopList({ cursor = 1n, limit = 20 } = {}) {
   try {
     const json = await workerApiGet("/shops", { cursor: cursor.toString(), limit: String(limit) });
-    if (Array.isArray(json?.shops)) return { shops: json.shops, nextCursor: json.nextCursor };
+    if (Array.isArray(json?.shops)) {
+      const shops = json.shops.map((s) => {
+        if (!s || typeof s !== "object") return s;
+        if (s.shop && typeof s.shop === "object") return { ...s, shop: { ...s.shop, __source: "worker" } };
+        if (s.owner || s.treasury) return { ...s, __source: "worker" };
+        return s;
+      });
+      return { shops, nextCursor: json.nextCursor };
+    }
     throw new Error("invalid worker response");
   } catch {
     const shopsAddress = await resolveShopsAddress();
@@ -432,7 +442,15 @@ async function fetchShopList({ cursor = 1n, limit = 20 } = {}) {
 async function fetchItemList({ cursor = 1n, limit = 20 } = {}) {
   try {
     const json = await workerApiGet("/items", { cursor: cursor.toString(), limit: String(limit) });
-    if (Array.isArray(json?.items)) return { items: json.items, nextCursor: json.nextCursor };
+    if (Array.isArray(json?.items)) {
+      const items = json.items.map((it) => {
+        if (!it || typeof it !== "object") return it;
+        if (it.item && typeof it.item === "object") return { ...it, item: { ...it.item, __source: "worker" } };
+        if (it.shopId || it.payToken) return { ...it, __source: "worker" };
+        return it;
+      });
+      return { items, nextCursor: json.nextCursor };
+    }
     throw new Error("invalid worker response");
   } catch {
     const itemsAddressVal = val("itemsAddress") || runtimeCfg.itemsAddress;
@@ -1380,6 +1398,7 @@ async function renderPlaza(container) {
       shopsEl.appendChild(
         el("div", {}, [
           el("a", { href: `#/shop/${s.shopId}`, text: `Shop #${s.shopId}` }),
+          el("span", { text: ` src=${shop.__source || ""}` }),
           el("span", { text: " owner=" }),
           addressNode(shop.owner),
           el("span", { text: " treasury=" }),
@@ -1399,7 +1418,7 @@ async function renderPlaza(container) {
         el("div", {}, [
           el("a", { href: `#/item/${it.itemId}`, text: `Item #${it.itemId}` }),
           el("span", {
-            text: ` shopId=${item.shopId} active=${item.active} payToken=${formatPayToken(item.payToken)} unitPrice=${item.unitPrice} requiresSerial=${item.requiresSerial} soulbound=${item.soulbound} action=${actionLabel}`
+            text: ` src=${item.__source || ""} shopId=${item.shopId} active=${item.active} payToken=${formatPayToken(item.payToken)} unitPrice=${item.unitPrice} requiresSerial=${item.requiresSerial} soulbound=${item.soulbound} action=${actionLabel}`
           }),
           shop ? el("span", {}, [el("span", { text: " shopOwner=" }), addressNode(shop.owner)]) : el("span", { text: "" }),
           el("button", {
@@ -1431,6 +1450,7 @@ async function renderShopDetail(container, shopId) {
   container.appendChild(itemsBox);
 
   const shop = await fetchShop(shopId);
+  out.appendChild(kv("source", String(shop.__source || "")));
   out.appendChild(kv("owner", addressNode(shop.owner)));
   out.appendChild(kv("treasury", addressNode(shop.treasury)));
   out.appendChild(kv("metadataHash", shortHex(shop.metadataHash)));
@@ -1464,7 +1484,7 @@ async function renderShopDetail(container, shopId) {
         el("div", {}, [
           el("a", { href: `#/item/${it.itemId}`, text: `Item #${it.itemId}` }),
           el("span", {
-            text: ` active=${item.active} payToken=${formatPayToken(item.payToken)} unitPrice=${item.unitPrice} requiresSerial=${item.requiresSerial} soulbound=${item.soulbound} action=${actionLabel}`
+            text: ` src=${item.__source || ""} active=${item.active} payToken=${formatPayToken(item.payToken)} unitPrice=${item.unitPrice} requiresSerial=${item.requiresSerial} soulbound=${item.soulbound} action=${actionLabel}`
           })
         ])
       );
@@ -1516,6 +1536,7 @@ async function renderItemDetail(container, itemId) {
   container.appendChild(metaBox);
 
   const item = await fetchItem(itemId);
+  out.appendChild(kv("source", String(item.__source || "")));
   out.appendChild(kv("shopId", el("a", { href: `#/shop/${item.shopId}`, text: `Shop #${item.shopId}` })));
   out.appendChild(kv("active", String(item.active)));
   out.appendChild(kv("payToken", formatPayToken(item.payToken)));
@@ -2129,6 +2150,102 @@ async function renderConfig(container) {
   document.getElementById("workerApiUrl").value = runtimeCfg.workerApiUrl || "";
 }
 
+async function renderDiagnostics(container) {
+  container.appendChild(el("h2", { text: "诊断（Diagnostics）" }));
+
+  const cfgBox = el("div", { id: "diagCfg" });
+  const out = el("pre", { id: "diagOut" });
+  container.appendChild(cfgBox);
+  container.appendChild(
+    el("div", {}, [
+      el("button", { text: "Check RPC", onclick: () => checkRpc().catch(showTxError) }),
+      el("button", { text: "Check Worker (permit)", style: "margin-left: 8px;", onclick: () => checkWorkerPermit().catch(showTxError) }),
+      el("button", { text: "Check Worker API (query)", style: "margin-left: 8px;", onclick: () => checkWorkerApi().catch(showTxError) }),
+      el("button", { text: "Open Config", style: "margin-left: 8px;", onclick: () => (window.location.hash = "#/config") })
+    ])
+  );
+  container.appendChild(out);
+
+  function write(obj) {
+    out.textContent = JSON.stringify(obj, null, 2);
+  }
+
+  function currentCfgSnapshot() {
+    return {
+      rpcUrl: getCurrentCfgValue("rpcUrl"),
+      chainId: getCurrentCfgValue("chainId"),
+      shopsAddress: getCurrentCfgValue("shopsAddress"),
+      itemsAddress: getCurrentCfgValue("itemsAddress"),
+      workerUrl: getCurrentCfgValue("workerUrl"),
+      workerApiUrl: getCurrentCfgValue("workerApiUrl")
+    };
+  }
+
+  function renderCfg() {
+    const c = currentCfgSnapshot();
+    cfgBox.innerHTML = "";
+    cfgBox.appendChild(el("div", { text: `rpcUrl=${c.rpcUrl || ""}` }));
+    cfgBox.appendChild(el("div", { text: `chainId=${c.chainId || ""}` }));
+    cfgBox.appendChild(el("div", { text: `shopsAddress=${c.shopsAddress || ""}` }));
+    cfgBox.appendChild(el("div", { text: `itemsAddress=${c.itemsAddress || ""}` }));
+    cfgBox.appendChild(el("div", { text: `workerUrl=${c.workerUrl || ""}` }));
+    cfgBox.appendChild(el("div", { text: `workerApiUrl=${c.workerApiUrl || ""}` }));
+  }
+
+  async function safeHttpGet(baseUrl, path) {
+    const base = normalizeBaseUrl(baseUrl);
+    if (!base) throw new Error("base url is empty");
+    const url = new URL(path, base);
+    return fetchJson(url.toString());
+  }
+
+  async function checkRpc() {
+    setText("txOut", "diagnostics: checking rpc...");
+    const latest = await publicClient.getBlockNumber();
+    write({
+      ok: true,
+      kind: "rpc",
+      chainId: chain.id,
+      latestBlock: latest.toString(),
+      mismatch: getChainMismatch()
+    });
+    setText("txOut", "diagnostics: rpc ok");
+  }
+
+  async function checkWorkerPermit() {
+    setText("txOut", "diagnostics: checking worker (permit)...");
+    const base = getPermitBaseUrl();
+    const health = await safeHttpGet(base, "/health");
+    write({
+      ok: true,
+      kind: "worker_permit",
+      baseUrl: base,
+      health
+    });
+    setText("txOut", "diagnostics: worker (permit) ok");
+  }
+
+  async function checkWorkerApi() {
+    setText("txOut", "diagnostics: checking worker api (query)...");
+    const base = getApiBaseUrl();
+    const health = await safeHttpGet(base, "/health");
+    const config = await safeHttpGet(base, "/config");
+    const indexer = await safeHttpGet(base, "/indexer");
+    write({
+      ok: true,
+      kind: "worker_api",
+      baseUrl: base,
+      health,
+      config,
+      indexer
+    });
+    setText("txOut", "diagnostics: worker api ok");
+  }
+
+  renderCfg();
+  await checkRpc();
+}
+
 function render() {
   const app = document.getElementById("app");
   app.innerHTML = "";
@@ -2150,6 +2267,7 @@ function render() {
       navLink("购买记录", "#/purchases"),
       navLink("店主后台", "#/shop-console"),
       navLink("协议后台", "#/protocol-console"),
+      navLink("诊断", "#/diag"),
       navLink("配置", "#/config")
     ])
   ]);
@@ -2213,6 +2331,10 @@ function render() {
       }
       if (route.parts[0] === "config") {
         await renderConfig(main);
+        return;
+      }
+      if (route.parts[0] === "diag") {
+        await renderDiagnostics(main);
         return;
       }
       window.location.hash = "#/plaza";
