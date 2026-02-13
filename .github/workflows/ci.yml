@@ -38,3 +38,19 @@ jobs:
       - run: pnpm -C frontend install --frozen-lockfile
       - run: pnpm -C frontend check
       - run: pnpm -C frontend build
+
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+      - run: corepack enable
+      - run: pnpm -C worker install --frozen-lockfile
+      - run: pnpm -C frontend install --frozen-lockfile
+      - run: pnpm -C frontend exec playwright install --with-deps
+      - run: RUN_E2E=1 bash scripts/regression_local.sh

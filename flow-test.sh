@@ -1,4 +1,3 @@
 set -euo pipefail
 
-bash scripts/regression_local.sh
-pnpm -C worker test
+RUN_E2E=1 bash scripts/regression_local.sh

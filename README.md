@@ -128,6 +128,19 @@ sequenceDiagram
 - Demo 脚本入口：[scripts/demo_local.sh](scripts/demo_local.sh)
 - Reference（对齐用）：[reference/](reference/)
 
+## 回归与测试（统一入口）
+
+```bash
+# 合约 build + test
+./build-test-contracts.sh
+
+# Worker 冒烟（不含前端）
+./smoke.sh
+
+# 本地一键回归（含前端 E2E）
+./flow-test.sh
+```
+
 ## 功能列表（feat）
 
 - **Shop**

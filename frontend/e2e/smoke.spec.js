@@ -17,6 +17,10 @@ function demoItemId() {
   return process.env.ITEM_ID || "1";
 }
 
+function demoBuyerAddress() {
+  return process.env.BUYER || "0x70997970C51812dc3A010C7d01b50e0d17dc79C8";
+}
+
 async function setConfig(page, overrides = {}) {
   const cfg = { ...buildCfg(), ...overrides };
   await page.addInitScript(
@@ -136,6 +140,8 @@ test("buyer expired deadline shows actionable hint", async ({ page }) => {
 
   await gotoHash(page, `#/buyer?itemId=${encodeURIComponent(demoItemId())}`);
   await expect(page.locator("#main")).toContainText("买家入口");
+  await page.locator("#buyItemId").fill(demoItemId());
+  await page.locator("#buyBuyer").fill(demoBuyerAddress());
   await page.locator("#serialDeadline").fill("1");
   await page.getByRole("button", { name: "Fetch extraData" }).click();
   await expect(page.locator("#txOut")).toContainText("deadline_expired");
@@ -155,6 +161,7 @@ test("buyer missing worker shows network hint", async ({ page }) => {
   await setConfig(page, { workerUrl: "http://127.0.0.1:65534" });
   await gotoHash(page, `#/buyer?itemId=${encodeURIComponent(demoItemId())}`);
   await expect(page.locator("#main")).toContainText("买家入口");
+  await page.locator("#buyBuyer").fill(demoBuyerAddress());
   await page.getByRole("button", { name: "Fetch extraData" }).click();
   await expect(page.locator("#txOut")).toContainText("[NetworkError]");
   await expect(page.locator("#txOut")).toContainText("Fix:");

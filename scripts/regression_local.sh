@@ -79,14 +79,10 @@ echo "api: http://127.0.0.1:${API_PORT}"
 
 ANVIL_PID=""
 WORKER_PID=""
-MINER_PID=""
 
 cleanup() {
   if [ -n "${WORKER_PID}" ]; then
     kill "${WORKER_PID}" >/dev/null 2>&1 || true
-  fi
-  if [ -n "${MINER_PID}" ]; then
-    kill "${MINER_PID}" >/dev/null 2>&1 || true
   fi
   if [ -n "${ANVIL_PID}" ]; then
     kill "${ANVIL_PID}" >/dev/null 2>&1 || true
@@ -97,7 +93,7 @@ trap cleanup EXIT INT TERM
 mkdir -p "${DEMO_DIR}"
 
 echo "starting anvil..."
-anvil --port "${ANVIL_PORT}" --silent &
+anvil --port "${ANVIL_PORT}" --silent --block-time 1 &
 ANVIL_PID="$!"
 
 echo "waiting for rpc..."
@@ -109,25 +105,7 @@ for _ in $(seq 1 80); do
 done
 cast block-number --rpc-url "${RPC_URL}" >/dev/null
 
-start_miner() {
-  (
-    while true; do
-      cast rpc anvil_mine 0x1 --rpc-url "${RPC_URL}" >/dev/null 2>&1 || true
-      sleep 0.2
-    done
-  ) &
-  MINER_PID="$!"
-}
-
-stop_miner() {
-  if [ -n "${MINER_PID}" ]; then
-    kill "${MINER_PID}" >/dev/null 2>&1 || true
-    MINER_PID=""
-  fi
-}
-
 echo "deploying demo contracts..."
-start_miner
 DEPLOY_OUT="$(
   (
     cd "${ROOT_DIR}/contracts"
@@ -135,7 +113,6 @@ DEPLOY_OUT="$(
       forge script script/DeployDemo.s.sol:DeployDemo --rpc-url "${RPC_URL}" --broadcast -vv
   )
 )"
-stop_miner
 
 DEPLOY_JSON="$(printf "%s" "${DEPLOY_OUT}" | node -e "let s='';process.stdin.on('data',d=>s+=d.toString());process.stdin.on('end',()=>{const lines=s.split(/\\r?\\n/).filter(Boolean);const jsonLine=[...lines].reverse().find(l=>l.trim().startsWith('{')&&l.trim().endsWith('}'));if(!jsonLine)process.exit(1);process.stdout.write(jsonLine.trim())})")"
 printf "%s\n" "${DEPLOY_JSON}" > "${DEMO_JSON}"
@@ -305,6 +282,19 @@ if [ "${INACTIVE_RC}" -eq 0 ]; then
 fi
 
 cast send --rpc-url "${RPC_URL}" --private-key "${DEPLOYER_PK}" "${DEMO_ITEMS}" "setItemActive(uint256,bool)" "${DEMO_ITEM_ID}" true >/dev/null
+
+if [ "${RUN_E2E:-0}" = "1" ]; then
+  echo "running frontend e2e..."
+  if [ ! -d "${ROOT_DIR}/frontend/node_modules" ]; then
+    (cd "${ROOT_DIR}/frontend" && pnpm install)
+  fi
+  (
+    cd "${ROOT_DIR}/frontend"
+    RPC_URL="${RPC_URL}" CHAIN_ID="${DEMO_CHAIN_ID}" ITEMS_ADDRESS="${DEMO_ITEMS}" SHOPS_ADDRESS="${DEMO_SHOPS}" \
+      WORKER_URL="http://127.0.0.1:${WORKER_PORT}" WORKER_API_URL="http://127.0.0.1:${API_PORT}" ITEM_ID="${DEMO_ITEM_ID}" \
+      pnpm test:e2e
+  )
+fi
 
 echo "ok: regression passed"
 echo "demo.json: ${DEMO_JSON}"

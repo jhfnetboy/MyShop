@@ -4,10 +4,10 @@
 
 ## 0. 前置：统一环境变量（建议复制到终端）
 
-本地一键回归（自动跑：部署 + Worker + 成功购买 + 失败场景 + 查询验证）：
+本地一键回归（自动跑：部署 + Worker + 成功购买 + 失败场景 + 查询验证 + 前端 E2E）：
 
 ```bash
-./scripts/regression_local.sh
+RUN_E2E=1 ./scripts/regression_local.sh
 ```
 
 或直接用 pnpm（推荐，CI/本地更一致）：
@@ -16,11 +16,22 @@
 pnpm -C worker regression
 ```
 
+顶层脚本（同上，给 CI/本地统一入口用）：
+
+```bash
+./flow-test.sh
+```
+
 仅跑前端构建 + E2E：
 
 ```bash
 pnpm -C frontend regression
 ```
+
+说明：
+
+- `scripts/regression_local.sh` 会自动选择空闲端口启动 anvil/worker/api，并在最后输出 `demo/demo.json`（含 chainId/地址/buyer 等），用于复现与排查
+- Playwright 会自动启动前端 dev server（默认 5174），不需要手动 `pnpm dev`
 
 ```bash
 export RPC_URL="http://127.0.0.1:8545"
