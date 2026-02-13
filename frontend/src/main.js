@@ -183,13 +183,14 @@ function kv(label, valueNodeOrText) {
 }
 
 class ApiError extends Error {
-  constructor(message, { status, errorCode, errorDetails, url } = {}) {
+  constructor(message, { status, errorCode, errorDetails, url, retryAfterMs } = {}) {
     super(message);
     this.name = "ApiError";
     this.status = status ?? null;
     this.errorCode = errorCode ?? null;
     this.errorDetails = errorDetails ?? null;
     this.url = url ?? null;
+    this.retryAfterMs = retryAfterMs ?? null;
   }
 }
 
@@ -227,13 +228,15 @@ function formatError(e) {
     if (code === "deadline_expired") return `[${code}] permit deadline must be in the future\nFix: set deadline(ts) to a future time, then refetch permit`;
     if (code === "missing_param") return `[${code}] missing param: ${e.errorDetails?.param || "unknown"}\nFix: fill the missing field and retry`;
     if (code === "invalid_param") return `[${code}] invalid param: ${e.errorDetails?.param || "unknown"}\nFix: correct the value format and retry`;
-    if (code === "rate_limited") return `[${code}] too many requests\nFix: wait a bit and retry; reduce polling; consider switching data source to chain`;
+    if (code === "rate_limited")
+      return `[${code}] too many requests\nFix: wait ${Math.max(1, Math.ceil(Number(e.retryAfterMs || 0) / 1000))}s and retry; reduce polling; consider switching data source to chain`;
     if (code === "signer_not_configured") return `[${code}] permit signer not configured on server\nFix: configure WORKER_URL signer env and redeploy worker`;
     if (code === "serial_issuer_error") return `[${code}] serial issuer error\nFix: retry; if persists, check worker logs and signer health`;
     if (code === "method_not_allowed") return `[${code}] method not allowed`;
     if (code === "invalid_response") return `[${code}] invalid JSON response from server\nFix: check WORKER_API_URL points to query server`;
     if (code === "http_error" && e.status === 404) return `[${code}] endpoint not found\nFix: check WORKER_URL/WORKER_API_URL and path`;
-    if (code === "http_error" && e.status === 429) return `[${code}] too many requests\nFix: wait a bit and retry`;
+    if (code === "http_error" && e.status === 429)
+      return `[${code}] too many requests\nFix: wait ${Math.max(1, Math.ceil(Number(e.retryAfterMs || 0) / 1000))}s and retry`;
     const meta = [];
     if (e.status) meta.push(`status=${e.status}`);
     if (e.url) meta.push(`url=${e.url}`);
@@ -389,6 +392,7 @@ function getApiBaseUrl() {
 
 async function fetchJson(url, { signal } = {}) {
   const res = await fetch(url, { signal });
+  const retryAfterHeader = res.headers?.get ? res.headers.get("Retry-After") : null;
   const body = await res.text();
   let parsed = null;
   try {
@@ -399,11 +403,18 @@ async function fetchJson(url, { signal } = {}) {
 
   if (!res.ok) {
     const message = parsed?.error ? String(parsed.error) : `HTTP ${res.status}`;
+    const retryAfterMs =
+      typeof parsed?.retryAfterMs === "number" && Number.isFinite(parsed.retryAfterMs)
+        ? parsed.retryAfterMs
+        : retryAfterHeader
+          ? Number(retryAfterHeader) * 1000
+          : null;
     throw new ApiError(message, {
       status: res.status,
       errorCode: parsed?.errorCode ?? "http_error",
       errorDetails: parsed?.errorDetails ?? null,
-      url
+      url,
+      retryAfterMs
     });
   }
 
@@ -1472,6 +1483,10 @@ function navLink(label, href) {
   return el("a", { href, text: label, style: "margin-right: 12px;" });
 }
 
+function navLinkWithId(id, label, href) {
+  return el("a", { id, href, text: label, style: "margin-right: 12px;" });
+}
+
 async function fetchJsonWithTimeout(url, timeoutMs) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -1885,7 +1900,7 @@ async function renderBuyer(container) {
   routeState.buyerItemId = null;
 }
 
-async function renderShopConsole(container) {
+async function renderShopConsole(container, query = {}) {
   container.appendChild(el("h2", { text: "店主/运营后台（Shop Owner / Operator）" }));
   container.appendChild(
     el("div", { text: "提示：写操作会校验 shop owner / protocol owner / shopRoles；失败时会给出可操作提示。" })
@@ -1895,7 +1910,7 @@ async function renderShopConsole(container) {
   container.appendChild(
     el("div", {}, [
       el("h3", { text: "Access Check" }),
-      inputRow("shopId", "shopIdAccess", "1"),
+      inputRow("shopId", "shopIdAccess", query.shopId || "1"),
       el("button", {
         text: "Check Access",
         onclick: async () => {
@@ -1903,6 +1918,9 @@ async function renderShopConsole(container) {
           const actor = getAddress(connectedAddress);
           const access = await getShopAccess({ shopId, actor });
           accessOut.textContent = JSON.stringify(access, null, 2);
+          if (access.isProtocolOwner || access.isShopOwner || access.rolesMask !== 0) {
+            window.location.hash = `#/shop-console?shopId=${shopId.toString()}`;
+          }
         }
       }),
       accessOut
@@ -1914,8 +1932,19 @@ async function renderShopConsole(container) {
     const actor = getAddress(connectedAddress);
     const access = await getShopAccess({ shopId, actor });
     accessOut.textContent = JSON.stringify(access, null, 2);
+    return access;
   };
-  await refreshAccess();
+  const initialAccess = await refreshAccess();
+
+  if (!initialAccess.isProtocolOwner && !initialAccess.isShopOwner && initialAccess.rolesMask === 0) {
+    container.appendChild(
+      el("div", {
+        style: "color: #b91c1c;",
+        text: "当前钱包在该 shopId 下没有权限：无法进入店主后台。请切换 shopId 或切换钱包后重试。"
+      })
+    );
+    return;
+  }
 
   const guardShop = ({ shopIdInputId, anyRolesMask = 0 }) => async (action) => {
     const shopId = BigInt(val(shopIdInputId));
@@ -2270,6 +2299,12 @@ function renderWalletRequired(container, { title, required }) {
   container.appendChild(el("div", { text: "请先点击顶部 Connect Wallet，然后重试。" }));
 }
 
+function renderRoleRequired(container, { title, required }) {
+  container.appendChild(el("h2", { text: title }));
+  container.appendChild(el("div", { text: `需要权限：${required}` }));
+  container.appendChild(el("div", { text: "建议：先打开「角色」页面，选择 shopId 做一次 Access Check。" }));
+}
+
 async function renderConfig(container) {
   container.appendChild(el("h2", { text: "配置（Config）" }));
 
@@ -2320,6 +2355,13 @@ async function renderRolesPage(container, query = {}) {
   container.appendChild(el("h2", { text: "角色与权限（Roles）" }));
   container.appendChild(el("div", { text: "用于确认：你是谁（protocol owner / shop owner / shopRoles）以及你能做什么。" }));
 
+  container.appendChild(
+    el("div", {}, [
+      el("h3", { text: "页面 IA（Information Architecture）" }),
+      el("div", { text: "广场：所有人可访问；买家：需要钱包；店主后台：需要 shop owner / operator；协议后台：需要 protocol owner。" })
+    ])
+  );
+
   const out = el("pre", { id: "rolesOut" });
   container.appendChild(
     el("div", {}, [
@@ -2336,6 +2378,14 @@ async function renderRolesPage(container, query = {}) {
     const owners = await getProtocolOwners();
     const access = await getShopAccess({ shopId, actor });
     const roles = decodeShopRoles(access.rolesMask);
+    const pageAccess = {
+      plaza: true,
+      buyer: !!connectedAddress,
+      purchases: true,
+      roles: !!connectedAddress,
+      shopConsole: access.isProtocolOwner || access.isShopOwner || access.rolesMask !== 0,
+      protocolConsole: access.isProtocolOwner
+    };
 
     out.textContent = JSON.stringify(
       {
@@ -2347,6 +2397,7 @@ async function renderRolesPage(container, query = {}) {
         isShopOwner: access.isShopOwner,
         rolesMask: access.rolesMask,
         roles,
+        pageAccess,
         recommendedEntry: access.isProtocolOwner ? "protocol-console" : access.isShopOwner || roles.length ? "shop-console" : "buyer"
       },
       null,
@@ -2476,7 +2527,7 @@ function render() {
       navLink("购买记录", "#/purchases"),
       navLink("角色", "#/roles"),
       navLink("店主后台", "#/shop-console"),
-      navLink("协议后台", "#/protocol-console"),
+      navLinkWithId("navProtocolConsole", "协议后台", "#/protocol-console"),
       navLink("诊断", "#/diag"),
       navLink("配置", "#/config")
     ])
@@ -2502,11 +2553,17 @@ function render() {
           const isProtocolOwner =
             (owners.shopsOwner && owners.shopsOwner === addr) || (owners.itemsOwner && owners.itemsOwner === addr);
           setText("roleSummary", isProtocolOwner ? "role=protocolOwner" : "role=walletConnected");
+          const navProtocol = document.getElementById("navProtocolConsole");
+          if (navProtocol) navProtocol.style.display = isProtocolOwner ? "" : "none";
         } catch {
           setText("roleSummary", "role=walletConnected");
+          const navProtocol = document.getElementById("navProtocolConsole");
+          if (navProtocol) navProtocol.style.display = "none";
         }
       } else {
         setText("roleSummary", "");
+        const navProtocol = document.getElementById("navProtocolConsole");
+        if (navProtocol) navProtocol.style.display = "none";
       }
 
       const now = Date.now();
@@ -2580,7 +2637,7 @@ function render() {
           renderWalletRequired(main, { title: "店主/运营后台（Shop Owner / Operator）", required: "shop owner / operator" });
           return;
         }
-        await renderShopConsole(main);
+        await renderShopConsole(main, route.query);
         return;
       }
       if (route.parts[0] === "protocol-console") {
@@ -2596,6 +2653,10 @@ function render() {
             (owners.shopsOwner && owners.shopsOwner === addr) || (owners.itemsOwner && owners.itemsOwner === addr);
         } catch {
           canWrite = false;
+        }
+        if (!canWrite) {
+          renderRoleRequired(main, { title: "协议后台（Protocol）", required: "protocol owner" });
+          return;
         }
         await renderProtocolConsole(main, { canWrite });
         return;

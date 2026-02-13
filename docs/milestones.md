@@ -47,6 +47,7 @@
 - B4：Permit API 限流与滥用防护（最小可行：按 IP/路径的滑动窗口）
   - 状态：已完成（默认开启；429 返回 errorCode=rate_limited + Retry-After；可通过 env 调整阈值）
 - B5：签名密钥治理文档（托管/轮换/隔离资金权限/审计流程）
+  - 状态：已完成（见 docs/worker.md「签名密钥治理（B5）」）
 
 ## 3. Milestone C：前端流程打磨（让“入口齐全”变成“体验可用”）
 

@@ -136,7 +136,9 @@ pnpm run dev
 推荐流程（最小可行）：
 
 1. 生成新 key（离线或 KMS），拿到新 signer 地址
-2. 在低峰期把合约 signer 地址更新为新地址
+2. 在低峰期把合约 signer 地址更新为新地址（协议 owner 执行）：
+   - `MyShopItems.setSerialSigner(newSigner)`
+   - `MyShopItems.setRiskSigner(newSigner)`
 3. 部署/滚动重启 Worker，让它开始用新 key 签名
 4. 观察 `permit /metrics` 与业务交易成功率，确认新签名已生效
 5. 回收旧 key（撤销访问、销毁旧 secret、留存审计记录）
@@ -157,6 +159,17 @@ pnpm run dev
 - Worker 运行账户不应具备任何链上资产权限（不持有资金、不做链上写操作）
 - 不要复用“部署者/管理员”私钥作为 signer key
 - Risk signer 应更严格（更少人可接触、更严格的审批流程）
+
+### 事故响应（Incident Response）
+
+如果怀疑 signer key 泄露或被滥用：
+
+1. 立即在合约侧切换 signer 地址到新地址（或切到空地址/冻结策略，视业务容忍度）
+2. 立即停止旧 Worker 实例并吊销旧 secret 的访问（KMS/Secret Manager/文件挂载权限）
+3. 复盘影响范围：
+   - SerialPermit：是否出现异常串号签名/重复 nonce/异常 buyer 来源
+   - RiskAllowance：是否出现异常 maxItems 放行
+4. 补齐审计与告警阈值：异常请求量、429、签名失败率、外部 issuer 错误率等
 
 ## Query API（聚合查询）
 
