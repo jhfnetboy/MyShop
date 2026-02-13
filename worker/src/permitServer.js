@@ -495,6 +495,11 @@ async function _resolveSerialHash({ url, serialIssuerUrl, buyer, itemId }) {
 }
 
 async function _issueSerial(serialIssuerUrl, payload) {
+  if (serialIssuerUrl === "mock" || serialIssuerUrl === "mock://serial") {
+    const seed = `myshop:serialIssuerMock:v1:${payload.buyer}:${payload.itemId}:${payload.context ?? ""}`;
+    return { serialHash: keccak256(toBytes(seed)) };
+  }
+
   let res;
   try {
     res = await fetch(serialIssuerUrl, {

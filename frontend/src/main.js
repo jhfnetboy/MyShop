@@ -77,7 +77,11 @@ function el(tag, attrs = {}, children = []) {
     else if (v === true) node.setAttribute(k, "");
     else node.setAttribute(k, v);
   }
-  for (const child of children) node.appendChild(child);
+  for (const child of children || []) {
+    if (child === null || child === undefined || child === false) continue;
+    if (child instanceof Node) node.appendChild(child);
+    else node.appendChild(document.createTextNode(String(child)));
+  }
   return node;
 }
 
@@ -211,9 +215,26 @@ function formatError(e) {
     return `[${code}]${suffix} ${msg}`;
   }
 
+  if (e && typeof e === "object" && "code" in e) {
+    const rawCode = e.code;
+    const code = typeof rawCode === "string" ? Number(rawCode) : rawCode;
+    if (code === 4001) return "[UserRejected] request rejected in wallet\nFix: confirm in wallet, or retry";
+    if (code === 4100) return "[WalletUnauthorized] wallet not authorized\nFix: connect wallet and approve the request";
+    if (code === 4200) return "[WalletUnsupported] wallet does not support this request\nFix: switch wallet/network, or update wallet";
+    if (code === 4900) return "[WalletDisconnected] wallet disconnected\nFix: open wallet and reconnect";
+    if (code === 4901) return "[ChainDisconnected] wallet chain disconnected\nFix: switch network in wallet, then retry";
+    if (code === -32002) return "[WalletPending] wallet request already pending\nFix: open wallet popup and complete/reject the pending request";
+  }
+
   if (msg.includes("Missing window.ethereum")) return "[WalletMissing] missing wallet provider\nFix: install/enable a wallet (e.g. MetaMask) and reload";
   if (msg.startsWith("Invalid address:")) return `[BadConfig] ${msg}\nFix: open Config and paste a valid address`;
   if (msg.toLowerCase().includes("failed to fetch")) return "[NetworkError] network request failed\nFix: check RPC_URL / WORKER_URL / WORKER_API_URL, then retry";
+  if (msg.toLowerCase().includes("err_connection_refused") || msg.toLowerCase().includes("econnrefused"))
+    return "[NetworkError] connection refused\nFix: start RPC/worker servers and confirm URLs/ports, then retry";
+  if (msg.toLowerCase().includes("networkerror") && msg.toLowerCase().includes("fetch"))
+    return "[NetworkError] network request failed\nFix: check RPC_URL / WORKER_URL / WORKER_API_URL, then retry";
+  if (msg.toLowerCase().includes("load failed"))
+    return "[NetworkError] network request failed\nFix: check RPC_URL / WORKER_URL / WORKER_API_URL, then retry";
   if (msg.includes("NotOwner")) return "[NoPermission] protocol owner required\nFix: connect the protocol owner wallet";
   if (msg.includes("NotShopOwner")) return "[NoPermission] shop owner/operator required\nFix: connect shop owner wallet or grant role in Shop Console (S-04)";
   if (msg.includes("InvalidRole")) return "[NoPermission] missing role\nFix: grant shop role in Shop Console (S-04) and retry";
@@ -228,6 +249,7 @@ function formatError(e) {
   if (msg.includes("ShopNotFound")) return "[ShopNotFound] shopId not found\nFix: check shopId in plaza/shop detail";
   if (msg.includes("MaxItemsReached")) return "[SoldOut] max items reached\nFix: increase maxItems via new item or update policy";
   if (msg.includes("InvalidAddress")) return "[InvalidAddress] invalid address\nFix: check address inputs and contract config";
+  if (msg.toLowerCase().includes("invalid address")) return "[InvalidAddress] invalid address\nFix: check address inputs and contract config";
   if (msg.includes("InvalidPayment")) return "[InvalidPayment] invalid payment\nFix: check payToken, unitPrice, quantity, and ETH value/approval";
   if (msg.includes("TransferFailed")) return "[TransferFailed] token transfer failed\nFix: ensure ERC20 balance + allowance are sufficient, then retry";
   if (msg.toLowerCase().includes("insufficient allowance")) return "[InsufficientAllowance] ERC20 allowance too low\nFix: approve a larger amount, then buy again";
@@ -402,124 +424,140 @@ async function resolveShopsAddress() {
   return getAddress(shopsAddress);
 }
 
-async function fetchShop(shopId) {
+async function fetchShop(shopId, { source } = {}) {
   const id = BigInt(shopId);
-  try {
-    const json = await workerApiGet("/shop", { shopId: id.toString() });
-    if (json?.shop) return { ...json.shop, __source: "worker" };
-    throw new Error("invalid worker response");
-  } catch {
-    const shopsAddress = await resolveShopsAddress();
-    const raw = await publicClient.readContract({
-      address: shopsAddress,
-      abi: myShopsAbi,
-      functionName: "shops",
-      args: [id]
-    });
-    return {
-      owner: pick(raw, "owner", 0),
-      treasury: pick(raw, "treasury", 1),
-      metadataHash: pick(raw, "metadataHash", 2),
-      paused: pick(raw, "paused", 3),
-      __source: "chain"
-    };
+  if (source !== "chain") {
+    try {
+      const json = await workerApiGet("/shop", { shopId: id.toString() });
+      if (json?.shop) return { ...json.shop, __source: "worker" };
+      throw new Error("invalid worker response");
+    } catch (e) {
+      if (source === "worker") throw e;
+    }
   }
+
+  const shopsAddress = await resolveShopsAddress();
+  const raw = await publicClient.readContract({
+    address: shopsAddress,
+    abi: myShopsAbi,
+    functionName: "shops",
+    args: [id]
+  });
+  return {
+    owner: pick(raw, "owner", 0),
+    treasury: pick(raw, "treasury", 1),
+    metadataHash: pick(raw, "metadataHash", 2),
+    paused: pick(raw, "paused", 3),
+    __source: "chain"
+  };
 }
 
-async function fetchItem(itemId) {
+async function fetchItem(itemId, { source } = {}) {
   const id = BigInt(itemId);
-  try {
-    const json = await workerApiGet("/item", { itemId: id.toString() });
-    if (json?.item) return { ...json.item, __source: "worker" };
-    throw new Error("invalid worker response");
-  } catch {
-    const itemsAddressVal = val("itemsAddress") || runtimeCfg.itemsAddress;
-    const itemsAddress = requireAddress(itemsAddressVal, "itemsAddress");
-    const raw = await publicClient.readContract({
-      address: itemsAddress,
-      abi: myShopItemsAbi,
-      functionName: "items",
-      args: [id]
-    });
-    return {
-      shopId: pick(raw, "shopId", 0).toString(),
-      payToken: pick(raw, "payToken", 1),
-      unitPrice: pick(raw, "unitPrice", 2).toString(),
-      nftContract: pick(raw, "nftContract", 3),
-      soulbound: pick(raw, "soulbound", 4),
-      tokenURI: pick(raw, "tokenURI", 5),
-      action: pick(raw, "action", 6),
-      actionData: pick(raw, "actionData", 7),
-      requiresSerial: pick(raw, "requiresSerial", 8),
-      active: pick(raw, "active", 9),
-      __source: "chain"
-    };
+  if (source !== "chain") {
+    try {
+      const json = await workerApiGet("/item", { itemId: id.toString() });
+      if (json?.item) return { ...json.item, __source: "worker" };
+      throw new Error("invalid worker response");
+    } catch (e) {
+      if (source === "worker") throw e;
+    }
   }
+
+  const itemsAddressVal = val("itemsAddress") || runtimeCfg.itemsAddress;
+  const itemsAddress = requireAddress(itemsAddressVal, "itemsAddress");
+  const raw = await publicClient.readContract({
+    address: itemsAddress,
+    abi: myShopItemsAbi,
+    functionName: "items",
+    args: [id]
+  });
+  return {
+    shopId: pick(raw, "shopId", 0).toString(),
+    payToken: pick(raw, "payToken", 1),
+    unitPrice: pick(raw, "unitPrice", 2).toString(),
+    nftContract: pick(raw, "nftContract", 3),
+    soulbound: pick(raw, "soulbound", 4),
+    tokenURI: pick(raw, "tokenURI", 5),
+    action: pick(raw, "action", 6),
+    actionData: pick(raw, "actionData", 7),
+    requiresSerial: pick(raw, "requiresSerial", 8),
+    active: pick(raw, "active", 9),
+    __source: "chain"
+  };
 }
 
-async function fetchShopList({ cursor = 1n, limit = 20 } = {}) {
-  try {
-    const json = await workerApiGet("/shops", { cursor: cursor.toString(), limit: String(limit) });
-    if (Array.isArray(json?.shops)) {
-      const shops = json.shops.map((s) => {
-        if (!s || typeof s !== "object") return s;
-        if (s.shop && typeof s.shop === "object") return { ...s, shop: { ...s.shop, __source: "worker" } };
-        if (s.owner || s.treasury) return { ...s, __source: "worker" };
-        return s;
-      });
-      return { shops, nextCursor: json.nextCursor };
+async function fetchShopList({ cursor = 1n, limit = 20, source } = {}) {
+  if (source !== "chain") {
+    try {
+      const json = await workerApiGet("/shops", { cursor: cursor.toString(), limit: String(limit) });
+      if (Array.isArray(json?.shops)) {
+        const shops = json.shops.map((s) => {
+          if (!s || typeof s !== "object") return s;
+          if (s.shop && typeof s.shop === "object") return { ...s, shop: { ...s.shop, __source: "worker" } };
+          if (s.owner || s.treasury) return { ...s, __source: "worker" };
+          return s;
+        });
+        return { shops, nextCursor: json.nextCursor };
+      }
+      throw new Error("invalid worker response");
+    } catch (e) {
+      if (source === "worker") throw e;
     }
-    throw new Error("invalid worker response");
-  } catch {
-    const shopsAddress = await resolveShopsAddress();
-    const count = await publicClient.readContract({
-      address: shopsAddress,
-      abi: myShopsAbi,
-      functionName: "shopCount",
-      args: []
-    });
-    const max = BigInt(count);
-    const list = [];
-    for (let id = cursor; id <= max && list.length < limit; id++) {
-      const shop = await fetchShop(id);
-      list.push({ shopId: id.toString(), shop });
-    }
-    const next = cursor + BigInt(list.length);
-    return { shops: list, nextCursor: next <= max ? next.toString() : null };
   }
+
+  const shopsAddress = await resolveShopsAddress();
+  const count = await publicClient.readContract({
+    address: shopsAddress,
+    abi: myShopsAbi,
+    functionName: "shopCount",
+    args: []
+  });
+  const max = BigInt(count);
+  const list = [];
+  for (let id = cursor; id <= max && list.length < limit; id++) {
+    const shop = await fetchShop(id, { source: "chain" });
+    list.push({ shopId: id.toString(), shop });
+  }
+  const next = cursor + BigInt(list.length);
+  return { shops: list, nextCursor: next <= max ? next.toString() : null };
 }
 
-async function fetchItemList({ cursor = 1n, limit = 20 } = {}) {
-  try {
-    const json = await workerApiGet("/items", { cursor: cursor.toString(), limit: String(limit) });
-    if (Array.isArray(json?.items)) {
-      const items = json.items.map((it) => {
-        if (!it || typeof it !== "object") return it;
-        if (it.item && typeof it.item === "object") return { ...it, item: { ...it.item, __source: "worker" } };
-        if (it.shopId || it.payToken) return { ...it, __source: "worker" };
-        return it;
-      });
-      return { items, nextCursor: json.nextCursor };
+async function fetchItemList({ cursor = 1n, limit = 20, source } = {}) {
+  if (source !== "chain") {
+    try {
+      const json = await workerApiGet("/items", { cursor: cursor.toString(), limit: String(limit) });
+      if (Array.isArray(json?.items)) {
+        const items = json.items.map((it) => {
+          if (!it || typeof it !== "object") return it;
+          if (it.item && typeof it.item === "object") return { ...it, item: { ...it.item, __source: "worker" } };
+          if (it.shopId || it.payToken) return { ...it, __source: "worker" };
+          return it;
+        });
+        return { items, nextCursor: json.nextCursor };
+      }
+      throw new Error("invalid worker response");
+    } catch (e) {
+      if (source === "worker") throw e;
     }
-    throw new Error("invalid worker response");
-  } catch {
-    const itemsAddressVal = val("itemsAddress") || runtimeCfg.itemsAddress;
-    const itemsAddress = requireAddress(itemsAddressVal, "itemsAddress");
-    const count = await publicClient.readContract({
-      address: itemsAddress,
-      abi: myShopItemsAbi,
-      functionName: "itemCount",
-      args: []
-    });
-    const max = BigInt(count);
-    const list = [];
-    for (let id = cursor; id <= max && list.length < limit; id++) {
-      const item = await fetchItem(id);
-      list.push({ itemId: id.toString(), item });
-    }
-    const next = cursor + BigInt(list.length);
-    return { items: list, nextCursor: next <= max ? next.toString() : null };
   }
+
+  const itemsAddressVal = val("itemsAddress") || runtimeCfg.itemsAddress;
+  const itemsAddress = requireAddress(itemsAddressVal, "itemsAddress");
+  const count = await publicClient.readContract({
+    address: itemsAddress,
+    abi: myShopItemsAbi,
+    functionName: "itemCount",
+    args: []
+  });
+  const max = BigInt(count);
+  const list = [];
+  for (let id = cursor; id <= max && list.length < limit; id++) {
+    const item = await fetchItem(id, { source: "chain" });
+    list.push({ itemId: id.toString(), item });
+  }
+  const next = cursor + BigInt(list.length);
+  return { items: list, nextCursor: next <= max ? next.toString() : null };
 }
 
 const purchasedEvent = parseAbiItem(
@@ -1410,9 +1448,21 @@ async function loadConfigFromWorker() {
 async function renderPlaza(container) {
   container.appendChild(el("h2", { text: "广场（All Shops）" }));
 
-  container.appendChild(el("div", { text: "数据源：优先 Worker Query API，失败则回退链上读取。" }));
+  container.appendChild(el("div", { text: "数据源：默认 auto（优先 Worker Query API，失败则回退链上读取）。" }));
 
-  container.appendChild(el("div", {}, [inputRow("shops limit", "plazaShopLimit", "20"), inputRow("items limit", "plazaItemLimit", "50")]));
+  const sourceSelect = el("select", { id: "plazaSource" }, [
+    el("option", { value: "auto", text: "auto" }),
+    el("option", { value: "worker", text: "worker" }),
+    el("option", { value: "chain", text: "chain" })
+  ]);
+
+  container.appendChild(
+    el("div", {}, [
+      inputRow("shops limit", "plazaShopLimit", "20"),
+      inputRow("items limit", "plazaItemLimit", "50"),
+      el("div", {}, [el("label", { for: "plazaSource", text: "source" }), sourceSelect])
+    ])
+  );
 
   const listBox = el("div", { id: "plazaList" });
   container.appendChild(el("button", { text: "Reload", onclick: () => load().catch(showTxError) }));
@@ -1423,9 +1473,11 @@ async function renderPlaza(container) {
     listBox.innerHTML = "";
     const shopLimit = Number(val("plazaShopLimit") || "20");
     const itemLimit = Number(val("plazaItemLimit") || "50");
+    const source = val("plazaSource") || "auto";
+    const fetchSource = source === "auto" ? undefined : source;
 
-    const { shops } = await fetchShopList({ cursor: 1n, limit: shopLimit });
-    const { items } = await fetchItemList({ cursor: 1n, limit: itemLimit });
+    const { shops } = await fetchShopList({ cursor: 1n, limit: shopLimit, source: fetchSource });
+    const { items } = await fetchItemList({ cursor: 1n, limit: itemLimit, source: fetchSource });
 
     const shopsById = new Map();
     for (const s of shops) shopsById.set(String(s.shopId), s.shop);
@@ -1477,6 +1529,7 @@ async function renderPlaza(container) {
 
   document.getElementById("plazaShopLimit").value = "20";
   document.getElementById("plazaItemLimit").value = "50";
+  document.getElementById("plazaSource").value = "auto";
   await load();
 }
 
