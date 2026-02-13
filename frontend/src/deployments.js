@@ -1,7 +1,8 @@
 export function getDeploymentDefaults(name) {
   if (!name) return {};
 
-  const key = String(name).toLowerCase();
+  const { env, version } = parseDeployment(name);
+  const key = env.toLowerCase();
 
   if (key === "anvil" || key === "anvil-hardhat" || key === "local-anvil") {
     return {
@@ -14,5 +15,36 @@ export function getDeploymentDefaults(name) {
     };
   }
 
+  if (key === "sepolia") {
+    return {
+      rpcUrl: "https://rpc.sepolia.org",
+      chainId: 11155111,
+      itemsAddress: "",
+      shopsAddress: "",
+      workerUrl: "",
+      workerApiUrl: "",
+      version
+    };
+  }
+
   return {};
+}
+
+export function parseDeployment(input) {
+  const raw = String(input ?? "").trim();
+  if (!raw) return { env: "", version: "" };
+
+  let env = raw;
+  let version = "";
+
+  const at = raw.indexOf("@");
+  const colon = raw.indexOf(":");
+  const sep = at >= 0 ? at : colon;
+
+  if (sep >= 0) {
+    env = raw.slice(0, sep).trim();
+    version = raw.slice(sep + 1).trim();
+  }
+
+  return { env, version };
 }
