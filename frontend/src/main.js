@@ -565,6 +565,8 @@ const purchasedEvent = parseAbiItem(
 );
 
 async function fetchPurchases({ buyer, shopId, itemId, limit, source, fromBlock, toBlock } = {}) {
+  if (source === "auto") source = undefined;
+
   const params = {
     buyer,
     shopId,
@@ -575,73 +577,77 @@ async function fetchPurchases({ buyer, shopId, itemId, limit, source, fromBlock,
     toBlock,
     include: "enrich"
   };
-  try {
-    const json = await workerApiGet("/purchases", params);
-    if (Array.isArray(json?.purchases)) return json;
-    throw new Error("invalid worker response");
-  } catch {
-    const itemsAddressVal = val("itemsAddress") || runtimeCfg.itemsAddress;
-    const itemsAddress = requireAddress(itemsAddressVal, "itemsAddress");
-    const latest = await publicClient.getBlockNumber();
-    const to = toBlock ? BigInt(toBlock) : latest;
-    const from = fromBlock ? BigInt(fromBlock) : latest > 5000n ? latest - 5000n : 0n;
-
-    const args = {};
-    if (buyer) args.buyer = requireAddress(buyer, "buyer");
-    if (shopId) args.shopId = BigInt(shopId);
-    if (itemId) args.itemId = BigInt(itemId);
-
-    const logs = await publicClient.getLogs({
-      address: itemsAddress,
-      event: purchasedEvent,
-      args: Object.keys(args).length ? args : undefined,
-      fromBlock: from,
-      toBlock: to
-    });
-
-    const max = Math.min(logs.length, limit != null ? Math.max(1, Number(limit)) : 200);
-    const sliced = logs.slice(0, max);
-    const purchases = [];
-
-    for (const log of sliced) {
-      const decoded = decodeEventLog({
-        abi: myShopItemsAbi,
-        data: log.data,
-        topics: log.topics
-      });
-      const base = {
-        chainId: chain.id,
-        txHash: log.transactionHash,
-        logIndex: Number(log.logIndex),
-        blockNumber: Number(log.blockNumber),
-        itemId: decoded.args.itemId?.toString(),
-        shopId: decoded.args.shopId?.toString(),
-        buyer: decoded.args.buyer,
-        recipient: decoded.args.recipient,
-        quantity: decoded.args.quantity?.toString(),
-        payToken: decoded.args.payToken,
-        payAmount: decoded.args.payAmount?.toString(),
-        platformFeeAmount: decoded.args.platformFeeAmount?.toString(),
-        serialHash: decoded.args.serialHash,
-        firstTokenId: decoded.args.firstTokenId?.toString()
-      };
-
-      const item = await fetchItem(base.itemId);
-      const shop = await fetchShop(base.shopId);
-      purchases.push({ ...base, item, shop });
+  if (source !== "chain") {
+    try {
+      const json = await workerApiGet("/purchases", params);
+      if (Array.isArray(json?.purchases)) return json;
+      throw new Error("invalid worker response");
+    } catch (e) {
+      if (source === "index") throw e;
     }
-
-    return {
-      ok: true,
-      source: "chain",
-      fromBlock: from.toString(),
-      toBlock: to.toString(),
-      latest: latest.toString(),
-      indexedToBlock: null,
-      count: purchases.length,
-      purchases
-    };
   }
+
+  const itemsAddressVal = val("itemsAddress") || runtimeCfg.itemsAddress;
+  const itemsAddress = requireAddress(itemsAddressVal, "itemsAddress");
+  const latest = await publicClient.getBlockNumber();
+  const to = toBlock ? BigInt(toBlock) : latest;
+  const from = fromBlock ? BigInt(fromBlock) : latest > 5000n ? latest - 5000n : 0n;
+
+  const args = {};
+  if (buyer) args.buyer = requireAddress(buyer, "buyer");
+  if (shopId) args.shopId = BigInt(shopId);
+  if (itemId) args.itemId = BigInt(itemId);
+
+  const logs = await publicClient.getLogs({
+    address: itemsAddress,
+    event: purchasedEvent,
+    args: Object.keys(args).length ? args : undefined,
+    fromBlock: from,
+    toBlock: to
+  });
+
+  const max = Math.min(logs.length, limit != null ? Math.max(1, Number(limit)) : 200);
+  const sliced = logs.slice(0, max);
+  const purchases = [];
+
+  for (const log of sliced) {
+    const decoded = decodeEventLog({
+      abi: myShopItemsAbi,
+      data: log.data,
+      topics: log.topics
+    });
+    const base = {
+      chainId: chain.id,
+      txHash: log.transactionHash,
+      logIndex: Number(log.logIndex),
+      blockNumber: Number(log.blockNumber),
+      itemId: decoded.args.itemId?.toString(),
+      shopId: decoded.args.shopId?.toString(),
+      buyer: decoded.args.buyer,
+      recipient: decoded.args.recipient,
+      quantity: decoded.args.quantity?.toString(),
+      payToken: decoded.args.payToken,
+      payAmount: decoded.args.payAmount?.toString(),
+      platformFeeAmount: decoded.args.platformFeeAmount?.toString(),
+      serialHash: decoded.args.serialHash,
+      firstTokenId: decoded.args.firstTokenId?.toString()
+    };
+
+    const item = await fetchItem(base.itemId);
+    const shop = await fetchShop(base.shopId);
+    purchases.push({ ...base, item, shop });
+  }
+
+  return {
+    ok: true,
+    source: "chain",
+    fromBlock: from.toString(),
+    toBlock: to.toString(),
+    latest: latest.toString(),
+    indexedToBlock: null,
+    count: purchases.length,
+    purchases
+  };
 }
 
 async function fetchMetadataFromTokenUri(tokenURI) {
@@ -1727,6 +1733,7 @@ async function renderPurchasesPage(container, query = {}) {
   container.appendChild(el("div", { text: "数据源：默认走 Worker Index；也可切换为 chain 扫描（更慢但更接近链上真实）。" }));
 
   const sourceSelect = el("select", { id: "purchasesSource" }, [
+    el("option", { value: "auto", text: "auto" }),
     el("option", { value: "index", text: "index" }),
     el("option", { value: "chain", text: "chain" })
   ]);
@@ -1815,6 +1822,28 @@ async function renderBuyer(container) {
 
 async function renderShopConsole(container) {
   container.appendChild(el("h2", { text: "店主/运营后台（Shop Owner / Operator）" }));
+  container.appendChild(
+    el("div", { text: "提示：写操作会校验 shop owner / protocol owner / shopRoles；失败时会给出可操作提示。" })
+  );
+
+  const accessOut = el("pre", { id: "shopAccessOut" });
+  container.appendChild(
+    el("div", {}, [
+      el("h3", { text: "Access Check" }),
+      inputRow("shopId", "shopIdAccess", "1"),
+      el("button", {
+        text: "Check Access",
+        onclick: async () => {
+          const shopId = BigInt(val("shopIdAccess"));
+          const actor = getAddress(connectedAddress);
+          const access = await getShopAccess({ shopId, actor });
+          accessOut.textContent = JSON.stringify(access, null, 2);
+        }
+      }),
+      accessOut
+    ])
+  );
+
   const guardShop = ({ shopIdInputId, anyRolesMask = 0 }) => async (action) => {
     const shopId = BigInt(val(shopIdInputId));
     await requireShopAccess({ shopId, anyRolesMask });
