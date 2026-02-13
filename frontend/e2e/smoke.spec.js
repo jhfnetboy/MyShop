@@ -89,6 +89,16 @@ async function gotoHash(page, hash) {
   }, hash);
 }
 
+async function installOkHealthRoutes(page) {
+  await page.route("**/health", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ ok: true })
+    });
+  });
+}
+
 test("diagnostics page renders and can check rpc", async ({ page }) => {
   await setConfig(page);
 
@@ -147,5 +157,190 @@ test("buyer missing worker shows network hint", async ({ page }) => {
   await expect(page.locator("#main")).toContainText("买家入口");
   await page.getByRole("button", { name: "Fetch extraData" }).click();
   await expect(page.locator("#txOut")).toContainText("[NetworkError]");
+  await expect(page.locator("#txOut")).toContainText("Fix:");
+});
+
+test("plaza worker rate_limited shows actionable hint", async ({ page }) => {
+  await setConfig(page);
+  await installOkHealthRoutes(page);
+
+  let shopsReq = 0;
+  await page.route("**/shops**", async (route) => {
+    shopsReq += 1;
+    if (shopsReq === 1) {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          shops: [
+            {
+              shopId: "1",
+              shop: {
+                owner: "0x0000000000000000000000000000000000000001",
+                treasury: "0x0000000000000000000000000000000000000002",
+                metadataHash: "0x" + "0".repeat(64),
+                paused: false
+              }
+            }
+          ],
+          nextCursor: null
+        })
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 429,
+      contentType: "application/json",
+      body: JSON.stringify({ ok: false, error: "too many requests", errorCode: "rate_limited" })
+    });
+  });
+
+  await page.route("**/items**", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        items: [
+          {
+            itemId: "1",
+            item: {
+              shopId: "1",
+              payToken: "0x0000000000000000000000000000000000000000",
+              unitPrice: "0",
+              nftContract: "0x0000000000000000000000000000000000000000",
+              soulbound: false,
+              tokenURI: "",
+              action: "0x0000000000000000000000000000000000000000",
+              actionData: "0x",
+              requiresSerial: false,
+              active: true
+            }
+          }
+        ],
+        nextCursor: null
+      })
+    });
+  });
+
+  await gotoHash(page, "#/plaza");
+  await expect(page.getByText("广场（All Shops）")).toBeVisible();
+
+  await page.selectOption("#plazaSource", "worker");
+  await page.getByRole("button", { name: "Reload" }).click();
+  await expect(page.locator("#txOut")).toContainText("rate_limited");
+  await expect(page.locator("#txOut")).toContainText("Fix:");
+});
+
+test("plaza worker invalid_response shows actionable hint", async ({ page }) => {
+  await setConfig(page);
+  await installOkHealthRoutes(page);
+
+  await page.route("**/shops**", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        shops: [
+          {
+            shopId: "1",
+            shop: {
+              owner: "0x0000000000000000000000000000000000000001",
+              treasury: "0x0000000000000000000000000000000000000002",
+              metadataHash: "0x" + "0".repeat(64),
+              paused: false
+            }
+          }
+        ],
+        nextCursor: null
+      })
+    });
+  });
+
+  let itemsReq = 0;
+  await page.route("**/items**", async (route) => {
+    itemsReq += 1;
+    if (itemsReq === 1) {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          items: [
+            {
+              itemId: "1",
+              item: {
+                shopId: "1",
+                payToken: "0x0000000000000000000000000000000000000000",
+                unitPrice: "0",
+                nftContract: "0x0000000000000000000000000000000000000000",
+                soulbound: false,
+                tokenURI: "",
+                action: "0x0000000000000000000000000000000000000000",
+                actionData: "0x",
+                requiresSerial: false,
+                active: true
+              }
+            }
+          ],
+          nextCursor: null
+        })
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: "text/plain",
+      body: "not-json"
+    });
+  });
+
+  await gotoHash(page, "#/plaza");
+  await expect(page.getByText("广场（All Shops）")).toBeVisible();
+
+  await page.selectOption("#plazaSource", "worker");
+  await page.getByRole("button", { name: "Reload" }).click();
+  await expect(page.locator("#txOut")).toContainText("invalid_response");
+  await expect(page.locator("#txOut")).toContainText("Fix:");
+});
+
+test("purchases index 404 shows actionable hint", async ({ page }) => {
+  await setConfig(page);
+  await installOkHealthRoutes(page);
+
+  let purchasesReq = 0;
+  await page.route("**/purchases**", async (route) => {
+    purchasesReq += 1;
+    if (purchasesReq === 1) {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          source: "index",
+          fromBlock: "0",
+          toBlock: "0",
+          indexedToBlock: "0",
+          count: 0,
+          purchases: []
+        })
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 404,
+      contentType: "application/json",
+      body: JSON.stringify({ ok: false, error: "not found" })
+    });
+  });
+
+  await gotoHash(page, "#/purchases");
+  await expect(page.getByText("购买记录（Purchases）")).toBeVisible();
+
+  await page.selectOption("#purchasesSource", "index");
+  await page.getByRole("button", { name: "Load" }).click();
+  await expect(page.locator("#txOut")).toContainText("endpoint not found");
   await expect(page.locator("#txOut")).toContainText("Fix:");
 });
