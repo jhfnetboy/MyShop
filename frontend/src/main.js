@@ -1713,6 +1713,31 @@ function parseBytesLen(hex) {
   return Math.max(0, Math.floor((s.length - 2) / 2));
 }
 
+function buildPurchaseProof(p) {
+  const itemsAddress = getCurrentCfgValue("itemsAddress");
+  const chainId = p && p.chainId != null ? Number(p.chainId) : Number(chain?.id || 0);
+  const serialHash = p.serialHash && String(p.serialHash) !== "0x" + "0".repeat(64) ? String(p.serialHash) : null;
+  return {
+    kind: "MyShopPurchaseProof",
+    version: 1,
+    chainId,
+    itemsAddress: itemsAddress ? String(itemsAddress) : "",
+    txHash: p.txHash ? String(p.txHash) : "",
+    logIndex: p.logIndex != null ? Number(p.logIndex) : null,
+    blockNumber: p.blockNumber != null ? Number(p.blockNumber) : null,
+    itemId: p.itemId != null ? String(p.itemId) : "",
+    shopId: p.shopId != null ? String(p.shopId) : "",
+    buyer: p.buyer ? String(p.buyer) : "",
+    recipient: p.recipient ? String(p.recipient) : "",
+    quantity: p.quantity != null ? String(p.quantity) : "",
+    payToken: p.payToken ? String(p.payToken) : "",
+    payAmount: p.payAmount != null ? String(p.payAmount) : "",
+    platformFeeAmount: p.platformFeeAmount != null ? String(p.platformFeeAmount) : "",
+    serialHash,
+    firstTokenId: p.firstTokenId != null ? String(p.firstTokenId) : ""
+  };
+}
+
 function renderPurchasesList(container, { purchases, emptyText }) {
   container.innerHTML = "";
   if (!Array.isArray(purchases) || purchases.length === 0) {
@@ -1721,20 +1746,53 @@ function renderPurchasesList(container, { purchases, emptyText }) {
   }
   for (const p of purchases) {
     const serialHash = p.serialHash && String(p.serialHash) !== "0x0000000000000000000000000000000000000000000000000000000000000000" ? shortHex(p.serialHash) : "-";
+    const proofBox = el("div", { style: "margin-left: 12px; display: none;" });
+    const proofPre = el("pre", { style: "white-space: pre-wrap;" });
+    const proof = buildPurchaseProof(p);
+    proofPre.textContent = JSON.stringify(proof, null, 2);
+    const btnToggle = el("button", {
+      text: "Proof",
+      style: "margin-left: 8px;",
+      onclick: () => {
+        proofBox.style.display = proofBox.style.display === "none" ? "" : "none";
+      }
+    });
+    const btnCopy = el("button", {
+      text: "Copy",
+      style: "margin-left: 8px;",
+      onclick: async () => {
+        const text = proofPre.textContent || "";
+        try {
+          if (navigator?.clipboard?.writeText) {
+            await navigator.clipboard.writeText(text);
+            setText("txOut", "proof copied");
+            return;
+          }
+        } catch {
+        }
+        setText("txOut", "copy not available; please select proof text manually");
+      }
+    });
+    proofBox.appendChild(el("div", {}, [btnCopy]));
+    proofBox.appendChild(proofPre);
     container.appendChild(
       el("div", {}, [
-        el("span", { text: `block=${p.blockNumber ?? ""} ` }),
-        txLinkNode(p.txHash),
-        el("span", { text: " item=" }),
-        el("a", { href: `#/item/${p.itemId}`, text: `#${p.itemId}` }),
-        el("span", { text: " shop=" }),
-        el("a", { href: `#/shop/${p.shopId}`, text: `#${p.shopId}` }),
-        el("span", {
-          text: ` qty=${p.quantity} payToken=${formatPayToken(p.payToken)} payAmount=${p.payAmount} fee=${p.platformFeeAmount} firstTokenId=${p.firstTokenId} serialHash=${serialHash} buyer=`
-        }),
-        addressNode(p.buyer),
-        el("span", { text: " recipient=" }),
-        addressNode(p.recipient)
+        el("div", {}, [
+          el("span", { text: `block=${p.blockNumber ?? ""} ` }),
+          txLinkNode(p.txHash),
+          el("span", { text: " item=" }),
+          el("a", { href: `#/item/${p.itemId}`, text: `#${p.itemId}` }),
+          el("span", { text: " shop=" }),
+          el("a", { href: `#/shop/${p.shopId}`, text: `#${p.shopId}` }),
+          el("span", {
+            text: ` qty=${p.quantity} payToken=${formatPayToken(p.payToken)} payAmount=${p.payAmount} fee=${p.platformFeeAmount} firstTokenId=${p.firstTokenId} serialHash=${serialHash} buyer=`
+          }),
+          addressNode(p.buyer),
+          el("span", { text: " recipient=" }),
+          addressNode(p.recipient),
+          btnToggle
+        ]),
+        proofBox
       ])
     );
   }
