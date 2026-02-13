@@ -124,8 +124,55 @@ test("plaza and purchases pages render", async ({ page }) => {
 
   await gotoHash(page, "#/purchases");
   await expect(page.getByText("购买记录（Purchases）")).toBeVisible();
+  await page.getByRole("button", { name: "Mine" }).click();
+  await expect(page.locator("#txOut")).toContainText("[WalletRequired]");
   await page.getByRole("button", { name: "Load" }).click();
   await expect(page.locator("#purchasesMeta")).toContainText("count=");
+});
+
+test("purchases proof toggle renders", async ({ page }) => {
+  await setConfig(page);
+  await installOkHealthRoutes(page);
+
+  await page.route("**/purchases**", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        source: "index",
+        count: 1,
+        fromBlock: 1,
+        toBlock: 1,
+        indexedToBlock: 1,
+        purchases: [
+          {
+            chainId: 31337,
+            txHash: "0x" + "1".repeat(64),
+            logIndex: 0,
+            blockNumber: 1,
+            itemId: "1",
+            shopId: "1",
+            buyer: "0x0000000000000000000000000000000000000001",
+            recipient: "0x0000000000000000000000000000000000000002",
+            quantity: "1",
+            payToken: "0x0000000000000000000000000000000000000000",
+            payAmount: "0",
+            platformFeeAmount: "0",
+            serialHash: "0x" + "0".repeat(64),
+            firstTokenId: "1"
+          }
+        ]
+      })
+    });
+  });
+
+  await gotoHash(page, "#/purchases");
+  await expect(page.getByText("购买记录（Purchases）")).toBeVisible();
+  await page.getByRole("button", { name: "Load" }).click();
+  await expect(page.locator("#purchasesList")).toContainText("item=#1");
+  await page.getByRole("button", { name: "Proof" }).click();
+  await expect(page.locator("#purchasesList")).toContainText('"kind": "MyShopPurchaseProof"');
 });
 
 test("shop console shows wallet-required gating", async ({ page }) => {

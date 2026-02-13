@@ -1923,7 +1923,10 @@ async function renderPurchasesPage(container, query = {}) {
       el("button", {
         text: "Mine",
         onclick: () => {
-          if (!connectedAddress) throw new Error("请先连接钱包");
+          if (!connectedAddress) {
+            setText("txOut", "[WalletRequired] 请先连接钱包");
+            return;
+          }
           document.getElementById("purchasesBuyer").value = connectedAddress;
         }
       }),
