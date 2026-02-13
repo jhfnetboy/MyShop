@@ -1421,6 +1421,15 @@ function navLink(label, href) {
   return el("a", { href, text: label, style: "margin-right: 12px;" });
 }
 
+function decodeShopRoles(rolesMask) {
+  const labels = [];
+  if ((rolesMask & SHOP_ROLE_SHOP_ADMIN) !== 0) labels.push("shopAdmin(1)");
+  if ((rolesMask & SHOP_ROLE_ITEM_MAINTAINER) !== 0) labels.push("itemMaintainer(2)");
+  if ((rolesMask & SHOP_ROLE_ITEM_EDITOR) !== 0) labels.push("itemEditor(4)");
+  if ((rolesMask & SHOP_ROLE_ITEM_ACTION_EDITOR) !== 0) labels.push("itemActionEditor(8)");
+  return labels;
+}
+
 function applyConfigFromInputs() {
   const next = {
     rpcUrl: val("rpcUrl") || "",
@@ -2270,6 +2279,47 @@ async function renderConfig(container) {
   document.getElementById("workerApiUrl").value = runtimeCfg.workerApiUrl || "";
 }
 
+async function renderRolesPage(container, query = {}) {
+  container.appendChild(el("h2", { text: "角色与权限（Roles）" }));
+  container.appendChild(el("div", { text: "用于确认：你是谁（protocol owner / shop owner / shopRoles）以及你能做什么。" }));
+
+  const out = el("pre", { id: "rolesOut" });
+  container.appendChild(
+    el("div", {}, [
+      inputRow("shopId", "rolesShopId", query.shopId || "1"),
+      el("button", { text: "Check", onclick: () => load().catch(showTxError) }),
+      out
+    ])
+  );
+
+  async function load() {
+    if (!connectedAddress) throw new Error("请先连接钱包");
+    const shopId = BigInt(val("rolesShopId"));
+    const actor = getAddress(connectedAddress);
+    const owners = await getProtocolOwners();
+    const access = await getShopAccess({ shopId, actor });
+    const roles = decodeShopRoles(access.rolesMask);
+
+    out.textContent = JSON.stringify(
+      {
+        actor,
+        protocolOwners: owners,
+        shopId: shopId.toString(),
+        shopOwner: access.shopOwner,
+        isProtocolOwner: access.isProtocolOwner,
+        isShopOwner: access.isShopOwner,
+        rolesMask: access.rolesMask,
+        roles,
+        recommendedEntry: access.isProtocolOwner ? "protocol-console" : access.isShopOwner || roles.length ? "shop-console" : "buyer"
+      },
+      null,
+      2
+    );
+  }
+
+  await load();
+}
+
 async function renderDiagnostics(container) {
   container.appendChild(el("h2", { text: "诊断（Diagnostics）" }));
 
@@ -2375,6 +2425,7 @@ function render() {
     el("h1", { text: "MyShop Plaza" }),
     el("button", { text: "Connect Wallet", onclick: () => connect().catch(showTxError) }),
     el("div", { id: "conn", text: connectedAddress ? `connected: ${connectedAddress}` : "not connected" }),
+    el("div", { id: "roleSummary", text: "" }),
     mismatch
       ? el("div", {
           style: "color: #b45309;",
@@ -2385,6 +2436,7 @@ function render() {
       navLink("广场", "#/plaza"),
       navLink("买家", "#/buyer"),
       navLink("购买记录", "#/purchases"),
+      navLink("角色", "#/roles"),
       navLink("店主后台", "#/shop-console"),
       navLink("协议后台", "#/protocol-console"),
       navLink("诊断", "#/diag"),
@@ -2403,6 +2455,20 @@ function render() {
 
   (async () => {
     try {
+      if (connectedAddress) {
+        try {
+          const owners = await getProtocolOwners();
+          const addr = getAddress(connectedAddress);
+          const isProtocolOwner =
+            (owners.shopsOwner && owners.shopsOwner === addr) || (owners.itemsOwner && owners.itemsOwner === addr);
+          setText("roleSummary", isProtocolOwner ? "role=protocolOwner" : "role=walletConnected");
+        } catch {
+          setText("roleSummary", "role=walletConnected");
+        }
+      } else {
+        setText("roleSummary", "");
+      }
+
       if (route.parts.length === 0 || route.parts[0] === "plaza") {
         await renderPlaza(main);
         return;
@@ -2422,6 +2488,14 @@ function render() {
       if (route.parts[0] === "buyer") {
         if (route.query.itemId) routeState.buyerItemId = String(route.query.itemId);
         await renderBuyer(main);
+        return;
+      }
+      if (route.parts[0] === "roles") {
+        if (!connectedAddress) {
+          renderWalletRequired(main, { title: "角色与权限（Roles）", required: "any wallet" });
+          return;
+        }
+        await renderRolesPage(main, route.query);
         return;
       }
       if (route.parts[0] === "shop-console") {
