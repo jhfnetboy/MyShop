@@ -298,6 +298,60 @@ Action 的安全边界：
 
 需求：单店可上架 item 的总数与社区 reputation 或 AI 风险系数相关；默认上限为 5。
 
+---
+
+## 7. 店铺 NFT + 积分卡商品（购买说明与配置要点）
+
+你希望“购买店铺的 NFT，同时得到积分卡（积分/通证）”。这类商品在 MyShop 中通过“NFT + Action”组合实现，且保证同笔交易的原子性。
+
+### 7.1 商品形态
+
+- NFT 合约：店铺铸造的会员卡/纪念卡，来源于白标合约（参考 [CommunityNFT.sol](../reference/ethchiangmai-hackathon-2026/contracts/src/CommunityNFT.sol)）
+- 积分卡：购买后按数量发放积分（ERC20），通过 Action 模块执行
+- 绑定动作：使用 `MintERC20Action` 在购买后调用积分合约进行铸币
+
+### 7.2 上架配置（Item 字段）
+
+- `nftContract`：NFT 的铸造入口（建议由 MyShopItems 持有 MINTER 权限，避免外部滥用）
+- `soulbound`：是否为 SBT（不可转移），用于会员卡等
+- `tokenURI`：NFT 元数据（展示在前端 item/detail）
+- `action`：设置为 `MintERC20Action`（见 [MintERC20Action.sol](../contracts/src/actions/MintERC20Action.sol#L7-L19)）
+- `actionData`：ABI 编码的参数：
+  - `abi.encode(address token, uint256 amountPerUnit)`
+  - `token`：积分的 ERC20 合约地址（需支持 `mint(address,uint256)`）
+  - `amountPerUnit`：每个单位数量（按 `quantity` 乘积）
+- `requiresSerial`：可选；若需“卡密/串号”，设为 `true` 并走预签名（参见第 5 章）
+- `payToken` / `unitPrice`：支付币种与单价
+
+### 7.3 购买入口与原子性
+
+- 买家在前端调用 `buy(itemId, quantity, recipient, extraData)`：
+  - 收款（ETH 或 ERC20）
+  - mint NFT 到 `recipient`
+  - 执行 `MintERC20Action`：向 `recipient` 铸 `amountPerUnit * quantity` 的积分
+  - 全部成功才 emit `Purchased`（包含 `itemId/shopId/buyer/recipient/quantity/payToken/payAmount/platformFeeAmount/serialHash/firstTokenId`）
+  - 任意一步失败将整笔交易回滚，避免“只得到 NFT 没有积分”的破坏性体验
+
+### 7.4 串号（卡密）与签名（可选）
+
+- 若 `requiresSerial=true`，购买前需向后端请求 `SerialPermit`：
+  - 通过 Worker 的 `/serial-permit` 生成 `extraData`（包含 `serialHash/deadline/nonce/sig`）
+  - 在 `buy(..., extraData)` 时传入；链上验证通过后将 `serialHash` 记录在事件里
+  - 接口与流程见 [worker.md 的 Permit API](./worker.md#L63-L109)
+
+### 7.5 前端展示与验收
+
+- Plaza / Item Detail：展示 `nftContract/action/actionDataBytes/tokenURI` 摘要
+- Purchases：每条记录展示 `action/nft/tokenURI` 摘要，可展开复制 `Proof`
+- 验收步骤参见 [acceptance_md.md 的 5.6](./acceptance_md.md#L155-L177)
+
+### 7.6 风控与治理建议
+
+- 只允许白名单内的 Action（见 MyShopItems 的 `setActionAllowed`）
+- 店铺级 pause 与 item 级 active 开关配合
+- 支付与价格保护、最大滑点校验（已在售卖合约实现）
+- 重要参数的 timelock（例如 24h），为社区发现异常留出观察期
+
 为保证“链上可执行的限制”，建议采用“风控签名证明”：
 
 - MyShop 风控服务（Risk Oracle）对 `(shopOwner, maxItems, riskScoreHash, deadline, nonce)` 出具签名

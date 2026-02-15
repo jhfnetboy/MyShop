@@ -11,6 +11,7 @@
 - 诊断页：新增风险摘要面板，按 totalPurchases 显示绿色/黄色/红色色标
 - Purchases 页面：在 meta 区增加风险简要标注（绿色/黄色/红色）
 - 风控评估页：增加风险色标徽章，统一视觉表达
+- 文档：Solution.md 增加“店铺 NFT + 积分卡商品”购买说明（配置字段、签名串号、原子执行）
 
 ### Changed
 - 合约售卖风控：APNTsSale / GTokenSale 增加价格保护
