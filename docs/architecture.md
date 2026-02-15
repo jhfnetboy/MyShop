@@ -106,3 +106,85 @@ IFT 是 NFT 的 typo；若把“是否允许购买某活动票/报名”看作 E
 - **中期**：把 Risk/Serial 的签名端拆成独立服务，Worker 只负责监听与转发。
 - **长期**：把 Action 的类型扩展为更多标准模块（积分、白名单门票、订阅、权益领取等）。
 - **扩展**：引入 Eligibility（资格）模块，支持 Event 门票的多重门槛与可配置策略。
+
+## IPFS 网关与 Pin 服务（去中心化设计）
+
+- 目标：长期稳定可用的内容寻址能力，支持多方共同维护与冗余备份
+- 架构建议：
+  - 网关：多节点 `go-ipfs` 开启 HTTP Gateway；前置 Nginx/HAProxy 做健康检查与负载均衡
+  - Pin 编排：使用 IPFS Cluster，设置副本数（Replication Factor ≥ 2），多维护者各自运行 Cluster peer
+  - 存储：允许挂载本地磁盘与对象存储（S3 兼容），按类别与项目分命名空间
+  - 监控：Prometheus + Grafana（节点可用性、Pinned 对象数量、网关响应延迟、错误率）
+  - 审计：定期对关键 CID 执行可达性与完整性验证（对比多网关返回大小与哈希）
+- 前端集成：
+  - 运行时配置 `IPFS_GATEWAY`（支持自定义域），统一把 `ipfs://` 转换为 `https://<gateway>/ipfs/...`
+  - 类别元数据中存放 `*Ipfs` 链接；前端“查看文档”按钮直接打开
+- 运维分工：
+  - 平台：维护 Cluster 管理与核心节点
+  - 社区/店主：各自运行 peer，提供额外副本与带宽
+  - CI：新文档发布自动 Pin 指定 CID，并写入环境覆盖 `MYSHOP_CATEGORIES_JSON`
+
+### 网关与节点运行（参考方案）
+
+- 基础要求：
+  - 服务器：2 核 CPU / 4GB+ 内存 / 200GB+ SSD（按文档体量扩容）
+  - 网络：稳定的上行/下行带宽，开放网关端口（默认 8080/5001 可自定义）
+  - 存储：本地挂载数据目录（如 `/var/ipfs`），备份到对象存储（可选）
+- 运行 go-ipfs（Docker 简例）：
+  - 拉取镜像并初始化：`ipfs init`（容器内）或挂载已有仓库
+  - 开启网关：设置 `Gateway.Enabled=true` 与 `Gateway.PublicGateways`（支持多域名）
+  - 反向代理：Nginx/HAProxy 健康检查，转发到多个 IPFS 网关节点
+- 运行 IPFS Cluster（多节点）：
+  - 部署 cluster-service 与 cluster-ctl，指定 peers 列表与 `replication_factor_min/max`
+  - 将核心文档与页面 CID 加入 Pin 列表；社区与店主节点加入后自动副本扩展
+  - 定期执行 `cluster-ctl status <CID>` 验证副本状态
+
+> 注意：我们把网关/Cluster 方案作为独立运维组件，MyShop 前端只依赖其可用性（运行时配置网关域名），不耦合具体实现。你可以选择裸机、Docker 或 Kubernetes 部署。
+
+### Docker Compose（Kubo + Cluster + Nginx/HAProxy）
+
+```yaml
+version: "3.8"
+services:
+  ipfs:
+    image: ipfs/kubo:latest
+    restart: unless-stopped
+    volumes:
+      - ./data/ipfs:/data/ipfs
+    ports:
+      - "5001:5001" # API
+      - "4001:4001" # Swarm
+      - "8080:8080" # Gateway (内部使用)
+    environment:
+      - IPFS_PROFILE=server
+
+  cluster:
+    image: ipfs/ipfs-cluster:latest
+    restart: unless-stopped
+    depends_on:
+      - ipfs
+    volumes:
+      - ./data/cluster:/data/ipfs-cluster
+    environment:
+      - CLUSTER_PEERNAME=node1
+      - CLUSTER_SECRET=<shared-secret>
+      - CLUSTER_IPFSHTTP_NODEMULTIADDRESS=/ip4/ipfs/tcp/5001
+      - CLUSTER_REPLICATIONFACTORMIN=2
+      - CLUSTER_REPLICATIONFACTORMAX=4
+    ports:
+      - "9094:9094" # API
+
+  gateway:
+    image: nginx:stable
+    restart: unless-stopped
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      - ipfs
+    # nginx.conf 反向代理到多个 ipfs 节点的 8080 端口，并带健康检查
+```
+
+> 提示：生产环境建议多机部署，`gateway` 反向代理到多个 `ipfs`/`cluster` 实例；将证书与密钥、安全配置移出 Compose，并启用监控与审计。

@@ -6,7 +6,8 @@ const DEPLOYMENTS = {
       itemsAddress: "",
       shopsAddress: "",
       workerUrl: "http://127.0.0.1:8787",
-      workerApiUrl: "http://127.0.0.1:8788"
+      workerApiUrl: "http://127.0.0.1:8788",
+      ipfsGateway: "https://ipfs.io"
     },
     versions: {
       demo: {
@@ -15,7 +16,8 @@ const DEPLOYMENTS = {
         itemsAddress: "",
         shopsAddress: "",
         workerUrl: "http://127.0.0.1:8787",
-        workerApiUrl: "http://127.0.0.1:8788"
+        workerApiUrl: "http://127.0.0.1:8788",
+        ipfsGateway: "https://ipfs.io"
       }
     }
   },
@@ -26,7 +28,8 @@ const DEPLOYMENTS = {
       itemsAddress: "",
       shopsAddress: "",
       workerUrl: "",
-      workerApiUrl: ""
+      workerApiUrl: "",
+      ipfsGateway: "https://ipfs.io"
     },
     versions: {
       v1: {
@@ -35,7 +38,8 @@ const DEPLOYMENTS = {
         itemsAddress: "",
         shopsAddress: "",
         workerUrl: "",
-        workerApiUrl: ""
+        workerApiUrl: "",
+        ipfsGateway: "https://ipfs.io"
       }
     }
   }

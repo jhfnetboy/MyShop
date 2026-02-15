@@ -52,7 +52,8 @@ function getRuntimeConfig() {
     workerUrl: stored.workerUrl || envCfg.workerUrl || "",
     workerApiUrl: stored.workerApiUrl || envCfg.workerApiUrl || "",
     apntsSaleUrl: stored.apntsSaleUrl || envCfg.apntsSaleUrl || "",
-    gtokenSaleUrl: stored.gtokenSaleUrl || envCfg.gtokenSaleUrl || ""
+    gtokenSaleUrl: stored.gtokenSaleUrl || envCfg.gtokenSaleUrl || "",
+    ipfsGateway: stored.ipfsGateway || envCfg.ipfsGateway || ""
   };
 }
 
@@ -133,6 +134,49 @@ function setInputValue(id, value) {
   if (node) node.value = String(value);
 }
 
+async function testGateways() {
+  const raw = val("ipfsGateway") || runtimeCfg.ipfsGateway || "";
+  const gateways = String(raw)
+    .split(",")
+    .map((x) => String(x).trim())
+    .filter((x) => !!x);
+  if (!gateways.length) {
+    setText("gatewayTestOut", "未配置 IPFS_GATEWAY");
+    return;
+  }
+  const results = [];
+  for (const g of gateways) {
+    const base = String(g).replace(/\/+$/, "");
+    const url = `${base}/ipfs/`;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 4000);
+    try {
+      const res = await fetch(url, { mode: "no-cors", cache: "no-store", signal: controller.signal });
+      clearTimeout(timeout);
+      results.push({ gateway: g, status: res ? "reachable" : "unknown" });
+    } catch {
+      clearTimeout(timeout);
+      results.push({ gateway: g, status: "unreachable" });
+    }
+  }
+  setText("gatewayTestOut", JSON.stringify(results, null, 2));
+}
+
+function ipfsGatewayUrls(u) {
+  if (!u) return [];
+  const s = String(u);
+  if (!s.startsWith("ipfs://")) return [s];
+  const p = s.slice(7);
+  const raw = String(runtimeCfg.ipfsGateway || "https://ipfs.io");
+  const gateways = raw.split(",").map((x) => String(x).trim()).filter((x) => !!x);
+  const unique = [];
+  for (const g of gateways.length ? gateways : ["https://ipfs.io"]) {
+    const base = String(g).replace(/\/+$/, "");
+    const url = `${base}/ipfs/${p}`;
+    if (!unique.includes(url)) unique.push(url);
+  }
+  return unique;
+}
 function formatAge(ms) {
   if (!ms) return "";
   const s = Math.max(0, Math.floor((Date.now() - ms) / 1000));
@@ -1881,6 +1925,7 @@ function applyConfigFromInputs() {
     defaultTemplateId: val("defaultTemplateId") || "",
     workerUrl: val("workerUrl") || "",
     workerApiUrl: val("workerApiUrl") || "",
+    ipfsGateway: val("ipfsGateway") || "",
     apntsSaleUrl: val("apntsSaleUrl") || "",
     gtokenSaleUrl: val("gtokenSaleUrl") || ""
   };
@@ -3146,10 +3191,47 @@ async function renderShopConsole(container, query = {}) {
                 const opt = document.createElement("option");
                 opt.value = String(c.id ?? "");
                 opt.textContent = String(c.name ?? c.id ?? "");
+                opt.setAttribute("data-docs-ipfs", String(c.docsIpfs ?? ""));
+                opt.setAttribute("data-readme-ipfs", String(c.readmeIpfs ?? ""));
+                opt.setAttribute("data-architecture-ipfs", String(c.architectureIpfs ?? ""));
+                opt.setAttribute("data-template-ipfs", String(c.templateIpfs ?? ""));
                 select.appendChild(opt);
               }
             } catch (e) {
               showTxError(e);
+            }
+          }
+        }),
+        el("button", {
+          text: "查看文档",
+          style: "margin-left: 8px;",
+          onclick: () => {
+            const select = document.getElementById("categorySelect");
+            const idx = select.selectedIndex;
+            if (idx < 0) return;
+            const opt = select.options[idx];
+            const docs = opt.getAttribute("data-docs-ipfs") || "";
+            const readme = opt.getAttribute("data-readme-ipfs") || "";
+            const arch = opt.getAttribute("data-architecture-ipfs") || "";
+            const tpl = opt.getAttribute("data-template-ipfs") || "";
+            const out = document.getElementById("categoryLinkOut");
+            out.innerHTML = "";
+            const links = [
+              { label: "Docs", url: docs },
+              { label: "README", url: readme },
+              { label: "Architecture", url: arch },
+              { label: "Template", url: tpl }
+            ];
+            for (const { label, url } of links) {
+              if (!url) continue;
+              const urls = ipfsGatewayUrls(url);
+              const row = el("div", {}, [el("span", { text: `${label}: ` })]);
+              urls.forEach((href, i) => {
+                const a = el("a", { href, target: "_blank", rel: "noopener", text: i === 0 ? "主网关" : `备${i}` });
+                row.appendChild(a);
+                if (i < urls.length - 1) row.appendChild(document.createTextNode(" | "));
+              });
+              out.appendChild(row);
             }
           }
         }),
@@ -3193,7 +3275,8 @@ async function renderShopConsole(container, query = {}) {
           text: "解除类别限制",
           style: "margin-left: 8px;",
           onclick: () => setDisabledMany(["soulbound", "requiresSerial", "tokenURI", "action"], false)
-        })
+        }),
+        el("div", { id: "categoryLinkOut", style: "margin-top: 6px;" })
       ]),
       inputRow("shopId", "shopIdAdd", "1"),
       inputRow("payToken", "payToken"),
@@ -3440,6 +3523,7 @@ async function renderConfig(container) {
       inputRow("ERC721_DEFAULT_TEMPLATE_ID (uint256)", "defaultTemplateId"),
       inputRow("WORKER_URL (permit)", "workerUrl"),
       inputRow("WORKER_API_URL (query)", "workerApiUrl"),
+      inputRow("IPFS_GATEWAY (eg. https://gw.example.com)", "ipfsGateway"),
       inputRow("APNTS_SALE_URL", "apntsSaleUrl"),
       inputRow("GTOKEN_SALE_URL", "gtokenSaleUrl"),
       el("button", {
@@ -3454,6 +3538,7 @@ async function renderConfig(container) {
           document.getElementById("defaultTemplateId").value = envCfg.defaultTemplateId || "";
           document.getElementById("workerUrl").value = envCfg.workerUrl || "";
           document.getElementById("workerApiUrl").value = envCfg.workerApiUrl || "";
+          document.getElementById("ipfsGateway").value = envCfg.ipfsGateway || "";
           document.getElementById("apntsSaleUrl").value = envCfg.apntsSaleUrl || "";
           document.getElementById("gtokenSaleUrl").value = envCfg.gtokenSaleUrl || "";
         }
@@ -3470,12 +3555,18 @@ async function renderConfig(container) {
           document.getElementById("defaultTemplateId").value = runtimeCfg.defaultTemplateId || "";
           document.getElementById("workerUrl").value = runtimeCfg.workerUrl || "";
           document.getElementById("workerApiUrl").value = runtimeCfg.workerApiUrl || "";
+          document.getElementById("ipfsGateway").value = runtimeCfg.ipfsGateway || "";
           document.getElementById("apntsSaleUrl").value = runtimeCfg.apntsSaleUrl || "";
           document.getElementById("gtokenSaleUrl").value = runtimeCfg.gtokenSaleUrl || "";
         }
       }),
       el("button", { text: "Load from Worker /config", onclick: () => loadConfigFromWorker().catch(showTxError) }),
-      el("button", { text: "Save & Apply", onclick: () => applyConfigFromInputs() })
+      el("button", { text: "Save & Apply", onclick: () => applyConfigFromInputs() }),
+      el("button", {
+        text: "测试网关",
+        onclick: () => testGateways().catch((e) => setText("gatewayTestOut", String(e?.message || e)))
+      }),
+      el("pre", { id: "gatewayTestOut" })
     ])
   );
 
@@ -3488,6 +3579,7 @@ async function renderConfig(container) {
   document.getElementById("defaultTemplateId").value = runtimeCfg.defaultTemplateId || "";
   document.getElementById("workerUrl").value = runtimeCfg.workerUrl || "";
   document.getElementById("workerApiUrl").value = runtimeCfg.workerApiUrl || "";
+  document.getElementById("ipfsGateway").value = runtimeCfg.ipfsGateway || "";
   document.getElementById("apntsSaleUrl").value = runtimeCfg.apntsSaleUrl || "";
   document.getElementById("gtokenSaleUrl").value = runtimeCfg.gtokenSaleUrl || "";
 }

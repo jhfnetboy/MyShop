@@ -24,6 +24,7 @@
 - 前端：Add Item 增加类别下拉，应用后锁定相关字段（继承使用，不可修改）
 - Worker：/categories 支持 IPFS 文档链接（docsIpfs/readmeIpfs/architectureIpfs/templateIpfs）
 - 文档：新增验收指南 [ACCEPTANCE.md](file:///Users/jason/Dev/crypto-projects/MyShop/docs/ACCEPTANCE.md)，补充 IPFS 要求与流程
+- 前端：类别区域展示并可打开 IPFS 文档链接（Docs/README/Architecture/Template）
 
 ### Changed
 - 合约售卖风控：APNTsSale / GTokenSale 增加价格保护

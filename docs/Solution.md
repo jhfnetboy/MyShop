@@ -408,11 +408,51 @@ Action 的安全边界：
 
 - 字段：`{ id: string, name: string, docsIpfs: ipfs://, readmeIpfs: ipfs://, architectureIpfs: ipfs://, templateIpfs: ipfs:// }`
 - 所有 `*Ipfs` 字段应上传并指向 IPFS；平台统一维护，商店继承使用、不可修改
+- 前端网关集成：通过运行时 `IPFS_GATEWAY` 把 `ipfs://` 链接转换为 `https://<gateway>/ipfs/...`
 
 ### 8.7 验收与部署指南
 
 - 验收流程与环境配置详见：[ACCEPTANCE.md](file:///Users/jason/Dev/crypto-projects/MyShop/docs/ACCEPTANCE.md)
 - 请确保所有文件链接统一采用 IPFS（包括商品页面与类别文档）
+
+### 8.8 去中心化 IPFS 网关与 Pin 服务
+
+- 运行时配置：`VITE_IPFS_GATEWAY`（前端），支持自定义域名作为统一网关
+- Pin 编排：推荐 IPFS Cluster；多维护者共同运行 peer，设置副本数与监控
+- 运维：平台负责 Cluster 管理与核心节点；社区/店主提供副本；CI 自动 Pin 新文档 CID 并同步到 `MYSHOP_CATEGORIES_JSON`
+- 独立设计文档：[ipfs-gateway.md](file:///Users/jason/Dev/crypto-projects/MyShop/docs/ipfs-gateway.md)
+
+### 8.9 ENS 设计与嵌入（Shop/社区）
+
+- 目标：为社区与每个店铺提供可读性强的 ENS 名称与内容寻址入口
+- 命名策略（示例）：
+  - 基域名：`aastar.eth`（平台持有）
+  - 社区：`<community>.aastar.eth`（社区运营方管理）
+  - 店铺：`<shop>.aastar.eth` 或 `<community>-<shop>.aastar.eth`
+- 解析策略：
+  - 设置 resolver 的 `contenthash` 指向店铺主页 IPFS CID（或前端路由入口）
+  - 可选设置 `text` 记录（`shopId`, `itemsAddress`, `workerUrl` 等）便于脚本/前端读取
+  - 对于 API：也可在 ENS 上挂 `worker` 子域名，解析到 Worker 入口（CNAME/ALIAS）
+- 嵌入方式：
+  - 合约/链上：Shop metadataHash 可包含 ENS 名称；或在 MyShops 中新增可选字段（未来扩展）
+  - 前端：在“店主后台”显示并可跳转 ENS 名称；解析 `contenthash` 打开 IPFS 页面
+  - 文档：类别元数据与验收文档统一使用 ENS/IPFS 作为首选入口
+- 运维流程：
+  - 平台注册/配置基域名与 resolver；社区申请子域；店主申请子子域
+  - CI 发布页面后更新相应 ENS 的 `contenthash` 指向最新 CID，形成版本化页面
+- 独立设计文档：[ens.md](file:///Users/jason/Dev/crypto-projects/MyShop/docs/ens.md)
+
+### 8.10 可选开关与回退策略（不影响原有流程）
+
+- IPFS 与 ENS 均为可选集成：不配置时，原有流程（HTTP 资源与链上交易）保持正常
+- tokenURI 支持 http(s) 与 ipfs://；仅当使用 ipfs:// 时才依赖网关与 Pin 服务
+- 类别文档链接（*Ipfs）为可选字段：未提供时，前端不展示“查看文档”的链接
+- 早期阶段可采用中心化存储与域名；后续按需迁移至 IPFS/ENS，而无需改动核心协议
+
+### 8.11 测试用例与回归入口
+
+- 完整清单与命令模板：[test_cases.md](file:///Users/jason/Dev/crypto-projects/MyShop/docs/test_cases.md)
+- 统一入口（本地/CI 一致）：`pnpm -C worker regression` 或 `./flow-test.sh`
 
 为保证“链上可执行的限制”，建议采用“风控签名证明”：
 

@@ -15,7 +15,8 @@ export function loadConfig() {
     gtokenSaleUrl: import.meta.env.VITE_GTOKEN_SALE_URL ?? defaults.gtokenSaleUrl ?? "",
     itemsActionAddress: import.meta.env.VITE_ITEMS_ACTION_ADDRESS ?? defaults.itemsActionAddress ?? "",
     erc721ActionAddress: import.meta.env.VITE_ERC721_ACTION_ADDRESS ?? defaults.erc721ActionAddress ?? "",
-    defaultTemplateId: import.meta.env.VITE_ERC721_DEFAULT_TEMPLATE_ID ?? defaults.defaultTemplateId ?? ""
+    defaultTemplateId: import.meta.env.VITE_ERC721_DEFAULT_TEMPLATE_ID ?? defaults.defaultTemplateId ?? "",
+    ipfsGateway: import.meta.env.VITE_IPFS_GATEWAY ?? defaults.ipfsGateway ?? ""
   };
 
   const cfg = {
@@ -29,7 +30,8 @@ export function loadConfig() {
     gtokenSaleUrl: raw.gtokenSaleUrl ?? "",
     itemsActionAddress: raw.itemsActionAddress ?? "",
     erc721ActionAddress: raw.erc721ActionAddress ?? "",
-    defaultTemplateId: raw.defaultTemplateId ?? ""
+    defaultTemplateId: raw.defaultTemplateId ?? "",
+    ipfsGateway: raw.ipfsGateway ?? ""
   };
 
   return cfg;

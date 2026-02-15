@@ -140,6 +140,36 @@ sequenceDiagram
 - Demo 脚本入口：[scripts/demo_local.sh](scripts/demo_local.sh)
 - Reference（对齐用）：[reference/](reference/)
 
+## IPFS 网关与 Pin 服务（去中心化）
+
+- 目标：为 `ipfs://...` 内容提供长期稳定的访问；多方共同维护副本与带宽
+- 架构建议：
+  - 多节点网关：运行 `go-ipfs` 开启 HTTP Gateway，前置 Nginx/HAProxy 做健康检查与负载
+  - Pin 编排：使用 IPFS Cluster，设置副本数（≥2），平台/社区/店主各自运行 peer
+  - 监控与审计：Prometheus+Grafana 监控节点与响应；定期校验关键 CID 的可达性与哈希一致性
+- 项目集成：
+  - 前端运行时配置：`VITE_IPFS_GATEWAY` 指定自定义网关域名
+  - 类别元数据：在 `/categories` 中维护 `docsIpfs/readmeIpfs/architectureIpfs/templateIpfs`
+  - 验收：店主后台“查看文档”按钮会使用配置的网关打开 IPFS 链接
+ - 运行指南：详见 [docs/architecture.md](docs/architecture.md) 的“网关与节点运行（参考方案）”
+- 独立设计文档：[docs/ipfs-gateway.md](docs/ipfs-gateway.md)
+
+## ENS 集成（社区与店铺）
+
+- 命名策略：平台基域（例如 `aastar.eth`）下为社区与店铺分配子域
+- 解析策略：resolver `contenthash` 指向 IPFS 页面；可额外记录 `text` 字段（shopId/workerUrl 等）
+- 前端嵌入：展示并可跳转 ENS 名称；解析 `contenthash` 打开 IPFS 页面
+- 详细设计：见 [docs/Solution.md](docs/Solution.md) 的“ENS 设计与嵌入”
+- 独立设计文档：[docs/ens.md](docs/ens.md)
+ - 可选性：不配置 ENS 时，使用常规域名与路径，原有流程照常运行
+
+## 快速上手（按角色）
+
+- 协议运营方（治理者）：[角色路径与期望](file:///Users/jason/Dev/crypto-projects/MyShop/docs/ACCEPTANCE.md#L95-L99)
+- 店铺运营者（Shop Owner/Operator）：[角色路径与期望](file:///Users/jason/Dev/crypto-projects/MyShop/docs/ACCEPTANCE.md#L100-L104)
+- 买家（Buyer）：[角色路径与期望](file:///Users/jason/Dev/crypto-projects/MyShop/docs/ACCEPTANCE.md#L105-L109)
+- 运维/社区节点（IPFS，选配）：部署与验证见 [docs/ipfs-gateway.md](file:///Users/jason/Dev/crypto-projects/MyShop/docs/ipfs-gateway.md)、[docs/architecture.md](file:///Users/jason/Dev/crypto-projects/MyShop/docs/architecture.md)
+- 全量可执行用例与命令模板：见 [docs/test_cases.md](file:///Users/jason/Dev/crypto-projects/MyShop/docs/test_cases.md)
 ## 回归与测试（统一入口）
 
 ```bash
