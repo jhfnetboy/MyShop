@@ -3077,6 +3077,25 @@ async function renderShopConsole(container, query = {}) {
           }
         }),
         el("button", {
+          text: "模板：NFT+NFT（按模板）",
+          onclick: () => {
+            try {
+              setInputValue("soulbound", "false");
+              setInputValue("requiresSerial", "false");
+              setInputValue("tokenURI", "");
+              const actionAddr = getCurrentCfgValue("erc721ActionAddress");
+              if (actionAddr) setInputValue("action", actionAddr);
+              const nft = getAddress(val("nftContract"));
+              const templateId = BigInt(val("mintNftTemplateId") || "0");
+              const payload = encodeAbiParameters([{ type: "uint256" }], [templateId]);
+              const hex = encodeAbiParameters([{ type: "address" }, { type: "bytes" }], [nft, payload]);
+              setInputValue("actionData", hex);
+            } catch (e) {
+              showTxError(e);
+            }
+          }
+        }),
+        el("button", {
           text: "模板：NFT+实物（兑换码）",
           onclick: () => {
             setInputValue("soulbound", "false");
