@@ -2290,6 +2290,8 @@ async function renderRiskPage(container) {
       el("div", { text: title }),
       el("div", { id, style: "font-size: 20px; font-weight: 600;" })
     ]);
+  const levelBadge = el("div", { id: "riskLevelBadge" });
+  stats.appendChild(levelBadge);
   stats.appendChild(statCard("风险等级", "riskLevel"));
   stats.appendChild(statCard("风险系数", "riskScore"));
   stats.appendChild(statCard("建议发行上限", "riskCap"));
@@ -2355,6 +2357,13 @@ async function renderRiskPage(container) {
 
     document.getElementById("riskLevel").textContent = level;
     document.getElementById("riskLevel").style.color = color;
+    levelBadge.innerHTML = "";
+    levelBadge.appendChild(
+      el("span", {
+        text: level.replace("预警", ""),
+        style: `display:inline-block;padding:4px 8px;border-radius:999px;background:${color}20;color:${color};font-weight:600;`
+      })
+    );
     document.getElementById("riskScore").textContent = `${score}/100`;
     document.getElementById("riskCap").textContent = capLabel;
     const updatedAtText = riskSummary?.updatedAt ? new Date(riskSummary.updatedAt).toLocaleString() : new Date().toLocaleString();
@@ -2728,6 +2737,15 @@ async function renderPurchasesPage(container, query = {}) {
   container.appendChild(meta);
   container.appendChild(list);
 
+  function buildRiskBadgeByCount(n) {
+    const level = n >= 100 ? "红色" : n >= 30 ? "黄色" : "绿色";
+    const color = level === "红色" ? "#dc2626" : level === "黄色" ? "#f59e0b" : "#16a34a";
+    return el("span", {
+      text: `风险：${level}`,
+      style: `display:inline-block;margin-left:8px;padding:2px 6px;border-radius:999px;background:${color}20;color:${color};font-weight:600;`
+    });
+  }
+
   async function load() {
     setText("txOut", "loading purchases...");
     const buyer = val("purchasesBuyer") || undefined;
@@ -2745,6 +2763,7 @@ async function renderPurchasesPage(container, query = {}) {
         text: `source=${res.source || ""} count=${res.count || 0} fromBlock=${res.fromBlock || ""} toBlock=${res.toBlock || ""} indexedToBlock=${res.indexedToBlock || ""}`
       })
     );
+    meta.appendChild(buildRiskBadgeByCount(Number(res.count || 0)));
     renderPurchasesList(list, { purchases: res.purchases, emptyText: "No purchases matched filters." });
     setText("txOut", "purchases loaded");
   }

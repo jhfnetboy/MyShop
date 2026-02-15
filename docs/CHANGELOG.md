@@ -8,6 +8,9 @@
 - 前端 Plaza：新增 community owner 过滤（可按 owner 地址筛选 Shop/Item）
 - 购买记录视图：补充 action/nft/tokenURI 摘要展示；Item 详情页新增 actionData 摘要
 - 文档验收：新增“5.6 广场社区过滤与动作/NFT 明细”验收步骤
+- 诊断页：新增风险摘要面板，按 totalPurchases 显示绿色/黄色/红色色标
+- Purchases 页面：在 meta 区增加风险简要标注（绿色/黄色/红色）
+- 风控评估页：增加风险色标徽章，统一视觉表达
 
 ### Changed
 - 合约售卖风控：APNTsSale / GTokenSale 增加价格保护
