@@ -1,4 +1,4 @@
-import { createPublicClient, createWalletClient, custom, decodeEventLog, getAddress, http, isAddress, parseAbiItem, parseEther } from "viem";
+import { createPublicClient, createWalletClient, custom, decodeEventLog, getAddress, http, isAddress, parseAbiItem, parseEther, encodeAbiParameters } from "viem";
 
 import { loadConfig } from "./config.js";
 import {
@@ -123,6 +123,11 @@ function val(id) {
 
 function setText(id, text) {
   document.getElementById(id).textContent = text;
+}
+
+function setInputValue(id, value) {
+  const node = document.getElementById(id);
+  if (node) node.value = String(value);
 }
 
 function formatAge(ms) {
@@ -3044,6 +3049,59 @@ async function renderShopConsole(container, query = {}) {
   container.appendChild(
     el("div", {}, [
       el("h3", { text: "Add Item" }),
+      el("div", { style: "margin: 8px 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px;" }, [
+        el("button", {
+          text: "模板：NFT+积分卡",
+          onclick: () => {
+            setInputValue("soulbound", "true");
+            setInputValue("requiresSerial", "false");
+            setInputValue("tokenURI", "ipfs://membership-card");
+            const actionAddr = getCurrentCfgValue("itemsActionAddress");
+            if (actionAddr) setInputValue("action", actionAddr);
+            setInputValue("actionData", "0x");
+          }
+        }),
+        el("button", {
+          text: "模板：NFT+NFT",
+          onclick: () => {
+            setInputValue("soulbound", "false");
+            setInputValue("requiresSerial", "false");
+            setInputValue("tokenURI", "ipfs://bundle-nft");
+            setInputValue("action", "");
+            setInputValue("actionData", "0x");
+          }
+        }),
+        el("button", {
+          text: "模板：NFT+实物（兑换码）",
+          onclick: () => {
+            setInputValue("soulbound", "false");
+            setInputValue("requiresSerial", "true");
+            setInputValue("tokenURI", "ipfs://physical-redeem");
+            setInputValue("action", "");
+            setInputValue("actionData", "0x");
+          }
+        }),
+        el("button", {
+          text: "模板：NFT+电子产品（密码/兑换码）",
+          onclick: () => {
+            setInputValue("soulbound", "false");
+            setInputValue("requiresSerial", "true");
+            setInputValue("tokenURI", "ipfs://digital-redeem");
+            setInputValue("action", "");
+            setInputValue("actionData", "0x");
+          }
+        }),
+        el("button", {
+          text: "模板：基础空白",
+          onclick: () => {
+            setInputValue("soulbound", "");
+            setInputValue("requiresSerial", "");
+            setInputValue("tokenURI", "");
+            setInputValue("action", "");
+            setInputValue("actionData", "0x");
+          }
+        })
+      ]),
       inputRow("shopId", "shopIdAdd", "1"),
       inputRow("payToken", "payToken"),
       inputRow("unitPrice", "unitPrice", "1000"),
@@ -3052,6 +3110,24 @@ async function renderShopConsole(container, query = {}) {
       inputRow("tokenURI", "tokenURI", "ipfs://token"),
       inputRow("action(optional)", "action", "0x0000000000000000000000000000000000000000"),
       inputRow("actionData(hex)", "actionData", "0x"),
+      el("div", { style: "margin: 8px 0;" }, [
+        el("h4", { text: "MintERC20 actionData builder" }),
+        inputRow("mintToken", "mintToken", "0x..."),
+        inputRow("amountPerUnit(uint256)", "amountPerUnit", "1000"),
+        el("button", {
+          text: "Build actionData",
+          onclick: () => {
+            try {
+              const token = getAddress(val("mintToken"));
+              const amount = BigInt(val("amountPerUnit") || "0");
+              const hex = encodeAbiParameters([{ type: "address" }, { type: "uint256" }], [token, amount]);
+              setInputValue("actionData", hex);
+            } catch (e) {
+              showTxError(e);
+            }
+          }
+        })
+      ]),
       inputRow("requiresSerial(true|false)", "requiresSerial", "true"),
       el("h4", { text: "Risk Allowance (optional)" }),
       inputRow("shopOwner", "riskShopOwner"),

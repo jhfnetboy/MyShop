@@ -352,6 +352,36 @@ Action 的安全边界：
 - 支付与价格保护、最大滑点校验（已在售卖合约实现）
 - 重要参数的 timelock（例如 24h），为社区发现异常留出观察期
 
+---
+
+## 8. 常用商品模板与抽象
+
+### 8.1 模板分类
+
+- NFT + 积分卡：购买即获得会员 NFT，同时按数量铸积分（ERC20）
+- NFT + NFT：购买获得主 NFT，同时再获得一次额外的 NFT（需专用 Action）
+- NFT + 实物（兑换码）：购买获得 NFT，链上记录串号哈希，线下履约实物
+- NFT + 电子产品（密码/兑换码）：购买获得 NFT，串号用于兑换账号/软件/课程等
+- 其他：通过自定义 Action 插入扩展逻辑（事件回传、外部系统联动）
+
+### 8.2 模板到字段映射
+
+- NFT + 积分卡：
+  - `soulbound=true`（会员卡）；`requiresSerial=false`
+  - `action=MintERC20Action；actionData=abi.encode(token, amountPerUnit)`
+- NFT + NFT：
+  - `soulbound=false`；`requiresSerial=false`
+  - `action=MintERC721Action（建议后续新增）；actionData=abi.encode(nftContract, tokenURI|templateId)`
+- NFT + 实物 / 电子产品：
+  - `soulbound=false`；`requiresSerial=true`
+  - `action=EmitEventAction 或留空（仅依赖 Purchased 事件+serialHash）`
+  - 线下履约由 Indexer/API 监听事件并完成发码/通知
+
+### 8.3 前端模板操作
+
+- 店主后台 Add Item 面板提供模板按钮，快速填充 `soulbound/requiresSerial/tokenURI/action/actionData` 预设
+- 提供 MintERC20 actionData builder，输入 `token` 与 `amountPerUnit` 自动生成 `actionData`
+
 为保证“链上可执行的限制”，建议采用“风控签名证明”：
 
 - MyShop 风控服务（Risk Oracle）对 `(shopOwner, maxItems, riskScoreHash, deadline, nonce)` 出具签名
