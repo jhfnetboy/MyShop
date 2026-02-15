@@ -12,7 +12,9 @@ export function loadConfig() {
     workerUrl: import.meta.env.VITE_WORKER_URL ?? defaults.workerUrl ?? "",
     workerApiUrl: import.meta.env.VITE_WORKER_API_URL ?? defaults.workerApiUrl ?? "",
     apntsSaleUrl: import.meta.env.VITE_APNTS_SALE_URL ?? defaults.apntsSaleUrl ?? "",
-    gtokenSaleUrl: import.meta.env.VITE_GTOKEN_SALE_URL ?? defaults.gtokenSaleUrl ?? ""
+    gtokenSaleUrl: import.meta.env.VITE_GTOKEN_SALE_URL ?? defaults.gtokenSaleUrl ?? "",
+    itemsActionAddress: import.meta.env.VITE_ITEMS_ACTION_ADDRESS ?? defaults.itemsActionAddress ?? "",
+    erc721ActionAddress: import.meta.env.VITE_ERC721_ACTION_ADDRESS ?? defaults.erc721ActionAddress ?? ""
   };
 
   const cfg = {
@@ -23,7 +25,9 @@ export function loadConfig() {
     workerUrl: raw.workerUrl ?? "",
     workerApiUrl: raw.workerApiUrl ?? "",
     apntsSaleUrl: raw.apntsSaleUrl ?? "",
-    gtokenSaleUrl: raw.gtokenSaleUrl ?? ""
+    gtokenSaleUrl: raw.gtokenSaleUrl ?? "",
+    itemsActionAddress: raw.itemsActionAddress ?? "",
+    erc721ActionAddress: raw.erc721ActionAddress ?? ""
   };
 
   return cfg;

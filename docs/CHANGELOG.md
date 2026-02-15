@@ -17,6 +17,7 @@
 - 前端：配置页新增 ITEMS_ACTION_ADDRESS（MintERC20Action 地址），模板直接可用
 - 前端：新增 MintERC721 actionData 生成器（两种编码模式）
 - Worker：新增 /serial-permit-demo 示例页面（测试串号 Permit）
+- 前端：NFT+NFT 模板自动读取 ERC721_ACTION_ADDRESS 填充 action
 
 ### Changed
 - 合约售卖风控：APNTsSale / GTokenSale 增加价格保护
