@@ -222,6 +222,33 @@ MODE=both ENABLE_API=1 RPC_URL=http://127.0.0.1:8545 CHAIN_ID=31337 ITEMS_ADDRES
 - `include`：默认包含 `enrich`（会额外返回 `item/shop` 链上读取结果），传 `include=` 可关闭 enrich
 - `source`：`index`（默认）或 `chain`（强制走链上 getLogs）
 
+## Keeper（定时任务指南）
+
+**职责**
+
+- 价格/风险相关的周期性维护（例如刷新外部价格缓存、归档购买索引）
+- 健康检查与告警（监控 `/health`、`/indexer`、`/metrics` 输出）
+- 数据持久化与轮转（将 in-memory 索引周期落盘，或同步到外部持久化存储）
+
+**触发方式（示例）**
+
+- 以 cron/定时器调用：
+  - 每 1 分钟：GET `/health` 与 `/indexer`，记录延迟与错误计数
+  - 每 5 分钟：GET `/purchases?source=chain&limit=2000`，与 index 差异做抽样比对
+  - 每 10 分钟：将当前 indexer 状态写入持久化（如 JSON/kv/sqlite）
+- 若需要外部价格缓存（可选）：调用外部 keeper 刷新价格，再由前端/业务读取
+
+**环境建议**
+
+- 生产环境开启 `ENABLE_API=1` 以便 keeper 读取状态
+- 通过 `INDEXER_*` 配置合理的窗口与上限（避免过大内存）
+- 日志与指标建议接入统一观测平台（含错误率阈值与告警）
+
+**注意事项**
+
+- Keeper 不应持有资金权限；仅读 API/指标或调用外部只读服务
+- 与签名服务（permit）隔离部署与权限，避免互相影响
+
 ### 常用请求（curl）
 
 ```bash
