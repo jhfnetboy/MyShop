@@ -1,0 +1,17 @@
+{
+	"folders": [
+		{
+			"path": "../launch"
+		},
+		{
+			"path": "."
+		},
+		{
+			"path": "../../mycelium/my-exploration/projects/registry"
+		},
+		{
+			"path": "../../mycelium/my-exploration/projects/aastar-sdk"
+		}
+	],
+	"settings": {}
+}
