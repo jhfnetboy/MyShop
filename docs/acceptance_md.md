@@ -1,6 +1,6 @@
-# Milestone mD 新手验收文档（面向产品经理）
+# Milestone 新手验收文档（面向产品经理）
 
-本文用于里程碑 mD 的可执行验收，目标读者为不熟悉代码的产品经理或验收人员。按步骤执行即可完成“部署、验证、回归、体验”的验收闭环。
+本文用于里程碑的可执行验收，目标读者为不熟悉代码的产品经理或验收人员。按步骤执行即可完成“部署、验证、回归、体验”的验收闭环。
 
 ## 1. 验收范围（mD 对齐）
 
@@ -73,6 +73,7 @@ pnpm -C worker regression:worker
 ### 4.3 前端
 
 ```bash
+pnpm -C frontend typecheck
 pnpm -C frontend regression
 ```
 
@@ -80,6 +81,7 @@ pnpm -C frontend regression
 
 - `vite build` 成功
 - `playwright test` 完成，失败为 0
+- `pnpm typecheck` 输出无错误
 
 ## 5. 手动验收（产品视角）
 
@@ -90,6 +92,9 @@ pnpm -C frontend regression
 页面入口：
 
 - 广场：`#/plaza`
+- aPNTs 购买页：`#/sale-apnts`
+- GToken 购买页：`#/sale-gtoken`
+- 风控评估：`#/risk`
 - 买家：`#/buyer`
 - 店主后台：`#/shop-console`
 - 协议后台：`#/protocol-console`
@@ -130,6 +135,23 @@ pnpm -C frontend regression
 
 - 错误提示包含明确的修复建议（例如重新获取 extraData）
 
+### 5.5 购买入口与风控展示
+
+进入 `#/sale-apnts` 与 `#/sale-gtoken`：
+
+1. 检查页面卡片是否包含支付方式、发行策略与购买步骤
+2. 若配置了外部入口（见第 6 节），点击按钮可跳转外部购买页
+
+进入 `#/risk`：
+
+1. 修改“已发行占比”和“流动速度”滑条
+2. 观察风险等级（绿色/黄色/红色）随阈值变化
+
+**通过标准**
+
+- sale 页面可展示清晰购买说明与入口按钮
+- 风控页面风险等级随占比变化正确切换（50% 黄、80% 红）
+
 ## 6. 关键参数说明（验收时可复用）
 
 若不使用一键脚本，可手动设置：
@@ -152,6 +174,8 @@ VITE_ITEMS_ADDRESS=
 VITE_SHOPS_ADDRESS=
 VITE_WORKER_URL=
 VITE_WORKER_API_URL=
+VITE_APNTS_SALE_URL=
+VITE_GTOKEN_SALE_URL=
 ```
 
 参考 [frontend/.env.example](../frontend/.env.example)
@@ -159,7 +183,7 @@ VITE_WORKER_API_URL=
 ## 7. mD 验收清单（勾选）
 
 - D1 环境与地址版本结构清晰（deployment + version 的方式可用）
-- D2 CI 最小命令可运行（合约 build/test、worker check/test、前端 build/check/e2e）
+- D2 CI 最小命令可运行（合约 build/test、worker check/test、前端 build/check/typecheck/e2e）
 - D3 SDK/地址源可用（前端通过部署配置或 env 读取地址）
 - D4 发布流程清晰（版本号、发布步骤、回滚策略）
 

@@ -1,33 +1,60 @@
-export function getDeploymentDefaults(name) {
-  if (!name) return {};
-
-  const { env, version } = parseDeployment(name);
-  const key = env.toLowerCase();
-
-  if (key === "anvil" || key === "anvil-hardhat" || key === "local-anvil") {
-    return {
+const DEPLOYMENTS = {
+  anvil: {
+    default: {
       rpcUrl: "http://127.0.0.1:8545",
       chainId: 31337,
-      itemsAddress: "0x5FC8d32690cc91D4c39d9d3abcBD16989F875707",
-      shopsAddress: "0xDc64a140Aa3E981100a9becA4E685f962f0cF6C9",
+      itemsAddress: "",
+      shopsAddress: "",
       workerUrl: "http://127.0.0.1:8787",
       workerApiUrl: "http://127.0.0.1:8788"
-    };
-  }
-
-  if (key === "sepolia") {
-    return {
+    },
+    versions: {
+      demo: {
+        rpcUrl: "http://127.0.0.1:8545",
+        chainId: 31337,
+        itemsAddress: "",
+        shopsAddress: "",
+        workerUrl: "http://127.0.0.1:8787",
+        workerApiUrl: "http://127.0.0.1:8788"
+      }
+    }
+  },
+  sepolia: {
+    default: {
       rpcUrl: "https://rpc.sepolia.org",
       chainId: 11155111,
       itemsAddress: "",
       shopsAddress: "",
       workerUrl: "",
-      workerApiUrl: "",
-      version
-    };
+      workerApiUrl: ""
+    },
+    versions: {
+      v1: {
+        rpcUrl: "https://rpc.sepolia.org",
+        chainId: 11155111,
+        itemsAddress: "",
+        shopsAddress: "",
+        workerUrl: "",
+        workerApiUrl: ""
+      }
+    }
+  }
+};
+
+export function getDeploymentDefaults(name) {
+  if (!name) return {};
+
+  const { env, version } = parseDeployment(name);
+  const key = env.toLowerCase();
+  const entry = DEPLOYMENTS[key];
+  if (!entry) return {};
+
+  if (version) {
+    const resolved = entry.versions?.[version];
+    if (resolved) return { ...entry.default, ...resolved, version };
   }
 
-  return {};
+  return { ...entry.default, version };
 }
 
 export function parseDeployment(input) {

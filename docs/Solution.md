@@ -33,18 +33,18 @@
 黑客松 repo 的参考实现已搬到 MyShop 的 reference 目录（只作为参考源，后续再抽到正式模块）：
 
 - 合约参考：
-  - [CommunityNFT.sol](file:///Users/jason/Dev/crypto-projects/MyShop/reference/ethchiangmai-hackathon-2026/contracts/src/CommunityNFT.sol)
-  - [CommunityNFTFactory.sol](file:///Users/jason/Dev/crypto-projects/MyShop/reference/ethchiangmai-hackathon-2026/contracts/src/CommunityNFTFactory.sol)
+-  - [CommunityNFT.sol](../reference/ethchiangmai-hackathon-2026/contracts/src/CommunityNFT.sol)
+-  - [CommunityNFTFactory.sol](../reference/ethchiangmai-hackathon-2026/contracts/src/CommunityNFTFactory.sol)
   - 以及 foundry 脚本与测试：`reference/ethchiangmai-hackathon-2026/contracts/script`、`contracts/test`
 - Telegram bot + 自动 mint 参考：
-  - [bot.py](file:///Users/jason/Dev/crypto-projects/MyShop/reference/ethchiangmai-hackathon-2026/services/bot/bot.py)（含“高质量反馈 → recordActivity → mint SBT”的流程）
-  - [reputation.ts](file:///Users/jason/Dev/crypto-projects/MyShop/reference/ethchiangmai-hackathon-2026/scripts/mint-service/reputation.ts)（viem + 私钥账户执行链上写入）
+-  - [bot.py](../reference/ethchiangmai-hackathon-2026/services/bot/bot.py)（含“高质量反馈 → recordActivity → mint SBT”的流程）
+-  - [reputation.ts](../reference/ethchiangmai-hackathon-2026/scripts/mint-service/reputation.ts)（viem + 私钥账户执行链上写入）
 - NFT 前端/工具参考：`reference/ethchiangmai-hackathon-2026/nft`
 
 此外，registry repo 中可复用的 MyShop 广场雏形（GToken Sale UI）来源：
 
-- [GTokenSalePage.tsx](file:///Users/jason/Dev/mycelium/my-exploration/projects/registry/src/pages/v3-admin/GTokenSalePage.tsx)
-- [useGTokenSale.ts](file:///Users/jason/Dev/mycelium/my-exploration/projects/registry/src/hooks/useGTokenSale.ts)
+- [GTokenSalePage.tsx](../../../mycelium/my-exploration/projects/registry/src/pages/v3-admin/GTokenSalePage.tsx)
+- [useGTokenSale.ts](../../../mycelium/my-exploration/projects/registry/src/hooks/useGTokenSale.ts)
 - 上述页面里涉及的地址/网络选择逻辑仅作为交互参考；MyShop 不依赖已废弃的 `@aastar/shared-config`
 
 ---
@@ -159,8 +159,8 @@
 
 黑客松合约的价值点：
 
-- `CommunityNFT` 支持三种模式与 HYBRID 下 token 级 soulbound 标记：见 [CommunityNFT.sol](file:///Users/jason/Dev/crypto-projects/MyShop/reference/ethchiangmai-hackathon-2026/contracts/src/CommunityNFT.sol#L24-L139)
-- 工厂合约要求 caller 必须是 community（registry hasRole gating）：见 [CommunityNFTFactory.sol](file:///Users/jason/Dev/crypto-projects/MyShop/reference/ethchiangmai-hackathon-2026/contracts/src/CommunityNFTFactory.sol#L42-L61)
+- `CommunityNFT` 支持三种模式与 HYBRID 下 token 级 soulbound 标记：见 [CommunityNFT.sol](../reference/ethchiangmai-hackathon-2026/contracts/src/CommunityNFT.sol#L24-L139)
+- 工厂合约要求 caller 必须是 community（registry hasRole gating）：见 [CommunityNFTFactory.sol](../reference/ethchiangmai-hackathon-2026/contracts/src/CommunityNFTFactory.sol#L42-L61)
 
 对 MyShop 的建议改造点（概念层，不写代码）：
 
@@ -232,7 +232,7 @@ Action 的安全边界：
 
 - 不把 Telegram bot 与链上 mint 权限绑定；bot 只做通知/交互
 - 通知触发建议来源于 Indexer/API（监听 Purchase 事件），避免用户刷 bot 直接触发链上写入
-- 黑客松 bot 的“触发 mint”逻辑可保留为参考样例：见 [bot.py 的 AUTO MINT](file:///Users/jason/Dev/crypto-projects/MyShop/reference/ethchiangmai-hackathon-2026/services/bot/bot.py#L582-L746)
+- 黑客松 bot 的“触发 mint”逻辑可保留为参考样例：见 [bot.py 的 AUTO MINT](../reference/ethchiangmai-hackathon-2026/services/bot/bot.py#L582-L746)
 
 ---
 
@@ -317,7 +317,7 @@ Action 的安全边界：
 
 复用：
 
-- 现有 GTokenSalePage 的 UI 结构可复用为 “广场”中的一个卡片/页面：见 [GTokenSalePage.tsx](file:///Users/jason/Dev/mycelium/my-exploration/projects/registry/src/pages/v3-admin/GTokenSalePage.tsx)
+- 现有 GTokenSalePage 的 UI 结构可复用为 “广场”中的一个卡片/页面：见 [GTokenSalePage.tsx](../../../mycelium/my-exploration/projects/registry/src/pages/v3-admin/GTokenSalePage.tsx)
 
 升级：
 
@@ -389,7 +389,7 @@ Action 的安全边界：
 ## 10. 安全与密钥管理（必须长期成立）
 
 - 仓库层面：
-  - `.env`、`*.log` 必须被忽略，避免误提交（MyShop 已有 [​.gitignore](file:///Users/jason/Dev/crypto-projects/MyShop/.gitignore)）
+- `.env`、`*.log` 必须被忽略，避免误提交（MyShop 已有 [​.gitignore](../.gitignore)）
 - 运行层面：
   - 私钥只存在于本地开发机或部署环境的 secret manager
   - 任何日志不得打印完整私钥/Token（必须脱敏）

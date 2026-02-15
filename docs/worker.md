@@ -11,10 +11,10 @@
 
 ## 目录
 
-- 入口：[worker/src/index.js](file:///Users/jason/Dev/crypto-projects/MyShop/worker/src/index.js)
-- 购买监听：[worker/src/watchPurchased.js](file:///Users/jason/Dev/crypto-projects/MyShop/worker/src/watchPurchased.js)
-- Permit 服务：[worker/src/permitServer.js](file:///Users/jason/Dev/crypto-projects/MyShop/worker/src/permitServer.js)
-- Query API 服务：[worker/src/apiServer.js](file:///Users/jason/Dev/crypto-projects/MyShop/worker/src/apiServer.js)
+- 入口：[worker/src/index.js](../worker/src/index.js)
+- 购买监听：[worker/src/watchPurchased.js](../worker/src/watchPurchased.js)
+- Permit 服务：[worker/src/permitServer.js](../worker/src/permitServer.js)
+- Query API 服务：[worker/src/apiServer.js](../worker/src/apiServer.js)
 
 ## 启动
 

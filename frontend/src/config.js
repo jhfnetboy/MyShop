@@ -10,7 +10,9 @@ export function loadConfig() {
     itemsAddress: import.meta.env.VITE_ITEMS_ADDRESS ?? defaults.itemsAddress ?? "",
     shopsAddress: import.meta.env.VITE_SHOPS_ADDRESS ?? defaults.shopsAddress ?? "",
     workerUrl: import.meta.env.VITE_WORKER_URL ?? defaults.workerUrl ?? "",
-    workerApiUrl: import.meta.env.VITE_WORKER_API_URL ?? defaults.workerApiUrl ?? ""
+    workerApiUrl: import.meta.env.VITE_WORKER_API_URL ?? defaults.workerApiUrl ?? "",
+    apntsSaleUrl: import.meta.env.VITE_APNTS_SALE_URL ?? defaults.apntsSaleUrl ?? "",
+    gtokenSaleUrl: import.meta.env.VITE_GTOKEN_SALE_URL ?? defaults.gtokenSaleUrl ?? ""
   };
 
   const cfg = {
@@ -19,7 +21,9 @@ export function loadConfig() {
     itemsAddress: raw.itemsAddress ?? "",
     shopsAddress: raw.shopsAddress ?? "",
     workerUrl: raw.workerUrl ?? "",
-    workerApiUrl: raw.workerApiUrl ?? ""
+    workerApiUrl: raw.workerApiUrl ?? "",
+    apntsSaleUrl: raw.apntsSaleUrl ?? "",
+    gtokenSaleUrl: raw.gtokenSaleUrl ?? ""
   };
 
   return cfg;

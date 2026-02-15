@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { decodeAbiParameters, getAddress, parseAbiParameters, recoverTypedDataAddress } from "viem";
 
 const storageKey = "myshop_frontend_config_v1";
 
@@ -21,6 +22,38 @@ function demoBuyerAddress() {
   return process.env.BUYER || "0x70997970C51812dc3A010C7d01b50e0d17dc79C8";
 }
 
+async function rpcCall(page, method, params = []) {
+  const res = await page.request.post(buildCfg().rpcUrl, {
+    data: { jsonrpc: "2.0", id: 1, method, params }
+  });
+  const json = await res.json();
+  if (json?.error) {
+    const err = new Error(json.error.message || "rpc error");
+    err.code = json.error.code;
+    err.data = json.error.data;
+    throw err;
+  }
+  return json.result;
+}
+
+function decodeSerialExtraData(extraData) {
+  const [serialHash, deadline, nonce, signature] = decodeAbiParameters(
+    parseAbiParameters("bytes32 serialHash,uint256 deadline,uint256 nonce,bytes sig"),
+    extraData
+  );
+  return { serialHash, deadline, nonce, signature };
+}
+
+async function getSerialSigner(page, cfgOverride = null) {
+  const cfg = cfgOverride || buildCfg();
+  const data = await rpcCall(page, "eth_call", [
+    { to: cfg.itemsAddress, data: "0x39c3a998" },
+    "latest"
+  ]);
+  const [addr] = decodeAbiParameters(parseAbiParameters("address"), data);
+  return getAddress(addr);
+}
+
 async function setConfig(page, overrides = {}) {
   const cfg = { ...buildCfg(), ...overrides };
   await page.addInitScript(
@@ -28,6 +61,69 @@ async function setConfig(page, overrides = {}) {
       localStorage.setItem(key, JSON.stringify(value));
     },
     [storageKey, cfg]
+  );
+}
+
+async function installMockWallet(page, overrides = {}) {
+  const cfg = { ...buildCfg(), ...overrides };
+  const chainId = cfg.chainId;
+  const rpcUrl = cfg.rpcUrl;
+  const address = demoBuyerAddress();
+  await page.addInitScript(
+    ([rpcUrlInit, chainIdInit, addressInit]) => {
+      let rpcId = 1;
+      const listeners = new Map();
+      const toChainIdHex = () => `0x${Number(chainIdInit).toString(16)}`;
+      const request = async ({ method, params } = {}) => {
+        if (method === "eth_chainId") return toChainIdHex();
+        if (method === "eth_accounts") return [addressInit];
+        if (method === "eth_requestAccounts") return [addressInit];
+        if (
+          (method === "eth_sendTransaction" || method === "eth_estimateGas") &&
+          Array.isArray(params) &&
+          params[0] &&
+          typeof params[0] === "object"
+        ) {
+          params[0] = { from: addressInit, ...params[0] };
+        }
+        const res = await fetch(rpcUrlInit, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            id: rpcId++,
+            method,
+            params: Array.isArray(params) ? params : []
+          })
+        });
+        const json = await res.json();
+        if (json?.error) {
+          const err = new Error(json.error.message || "rpc error");
+          err.code = json.error.code;
+          err.data = json.error.data;
+          throw err;
+        }
+        return json.result;
+      };
+      const on = (event, handler) => {
+        const key = String(event || "");
+        if (!listeners.has(key)) listeners.set(key, new Set());
+        listeners.get(key).add(handler);
+      };
+      const removeListener = (event, handler) => {
+        const key = String(event || "");
+        const set = listeners.get(key);
+        if (!set) return;
+        set.delete(handler);
+      };
+      window.ethereum = {
+        isMyShopMock: true,
+        request,
+        on,
+        removeListener
+      };
+    },
+    [rpcUrl, chainId, address]
   );
 }
 
@@ -56,6 +152,30 @@ async function requireWorkerApi(page) {
   } catch {
     test.skip(true, "worker api not available (start ./scripts/regression_local.sh first)");
   }
+}
+
+async function requireRpc(page) {
+  try {
+    await rpcCall(page, "eth_blockNumber");
+  } catch {
+    test.skip(true, "rpc not available (start ./scripts/regression_local.sh first)");
+  }
+}
+
+async function syncConfigFromWorker(page) {
+  const res = await page.request.get(`${buildCfg().workerApiUrl}/config`);
+  const json = await res.json();
+  if (!json?.ok) throw new Error("invalid worker /config response");
+  const base = buildCfg();
+  const cfg = {
+    ...base,
+    rpcUrl: String(json.rpcUrl || ""),
+    chainId: Number(json.chainId || 0),
+    itemsAddress: String(json.itemsAddress || ""),
+    shopsAddress: String(json.shopsAddress || "")
+  };
+  await setConfig(page, cfg);
+  return cfg;
 }
 
 async function waitAppReady(page) {
@@ -181,6 +301,48 @@ test("shop console shows wallet-required gating", async ({ page }) => {
   await expect(page.locator("#main")).toContainText("需要连接钱包");
 });
 
+test("roles page shows wallet-required gating", async ({ page }) => {
+  await setConfig(page);
+  await gotoHash(page, "#/roles");
+  await expect(page.locator("#main")).toContainText("需要连接钱包");
+});
+
+test("protocol console shows wallet-required gating", async ({ page }) => {
+  await setConfig(page);
+  await gotoHash(page, "#/protocol-console");
+  await expect(page.locator("#main")).toContainText("需要连接钱包");
+});
+
+test("roles page access check renders with wallet", async ({ page }) => {
+  await setConfig(page);
+  await requireRpc(page);
+  await installMockWallet(page);
+
+  await gotoHash(page, "#/roles?shopId=1");
+  await page.getByRole("button", { name: "Connect Wallet" }).click();
+  await expect(page.locator("#conn")).toContainText("connected:");
+
+  await page.evaluate((h) => {
+    window.location.hash = h;
+  }, "#/roles?shopId=1&refresh=1");
+  await expect(page.locator("#rolesOut")).toContainText('"pageAccess"');
+});
+
+test("protocol console shows role-required gating for non-owner", async ({ page }) => {
+  await setConfig(page);
+  await requireRpc(page);
+  await installMockWallet(page);
+
+  await gotoHash(page, "#/protocol-console");
+  await page.getByRole("button", { name: "Connect Wallet" }).click();
+  await expect(page.locator("#conn")).toContainText("connected:");
+
+  await page.evaluate((h) => {
+    window.location.hash = h;
+  }, "#/protocol-console?refresh=1");
+  await expect(page.locator("#main")).toContainText("需要权限");
+});
+
 test("buyer expired deadline shows actionable hint", async ({ page }) => {
   await setConfig(page);
   await requireWorkerApi(page);
@@ -212,6 +374,77 @@ test("buyer missing worker shows network hint", async ({ page }) => {
   await page.getByRole("button", { name: "Fetch extraData" }).click();
   await expect(page.locator("#txOut")).toContainText("[NetworkError]");
   await expect(page.locator("#txOut")).toContainText("Fix:");
+});
+
+test("buyer happy-path approve + permit + buy", async ({ page }) => {
+  await setConfig(page);
+  await requireWorkerApi(page);
+  const workerCfg = await syncConfigFromWorker(page);
+  await installMockWallet(page, workerCfg);
+
+  await gotoHash(page, `#/buyer?itemId=${encodeURIComponent(demoItemId())}`);
+  await expect(page.locator("#main")).toContainText("买家入口");
+
+  await page.getByRole("button", { name: "Connect Wallet" }).click();
+  await expect(page.locator("#conn")).toContainText("connected:");
+  await page.locator("#itemIdRead").fill(demoItemId());
+  await page.locator("#buyItemId").fill(demoItemId());
+  await page.locator("#buyQty").fill("1");
+  await page.locator("#buyRecipient").fill(demoBuyerAddress());
+  await page.locator("#buyBuyer").fill(demoBuyerAddress());
+  await page.locator("#serial").fill("SERIAL-E2E");
+  await page.locator("#serialDeadline").fill(String(Math.floor(Date.now() / 1000) + 3600));
+
+  await page.getByRole("button", { name: "Read Item" }).click();
+  await expect(page.locator("#itemOut")).toContainText("0x");
+
+  await page.getByRole("button", { name: "Approve" }).click();
+  await expect(page.locator("#txOut")).toContainText("confirmed", { timeout: 120_000 });
+
+  await page.getByRole("button", { name: "Fetch extraData" }).click();
+  await expect(page.locator("#txOut")).toContainText("serial extraData fetched");
+  const extraDataValue = await page.locator("#buyExtraData").inputValue();
+  const { serialHash, deadline, nonce, signature } = decodeSerialExtraData(extraDataValue);
+  const buyer = getAddress(await page.locator("#buyBuyer").inputValue());
+  const recovered = await recoverTypedDataAddress({
+    domain: {
+      name: "MyShop",
+      version: "1",
+      chainId: workerCfg.chainId,
+      verifyingContract: getAddress(workerCfg.itemsAddress)
+    },
+    types: {
+      SerialPermit: [
+        { name: "itemId", type: "uint256" },
+        { name: "buyer", type: "address" },
+        { name: "serialHash", type: "bytes32" },
+        { name: "deadline", type: "uint256" },
+        { name: "nonce", type: "uint256" }
+      ]
+    },
+    primaryType: "SerialPermit",
+    message: { itemId: BigInt(demoItemId()), buyer, serialHash, deadline, nonce },
+    signature
+  });
+  const serialSigner = await getSerialSigner(page, workerCfg);
+  expect(recovered).toBe(serialSigner);
+
+  await page.getByRole("button", { name: "Buy" }).click();
+  await expect(page.locator("#txOut")).toContainText("submitted:");
+  const txOutText = await page.locator("#txOut").innerText();
+  const hashMatch = txOutText.match(/submitted:\s*(0x[0-9a-fA-F]{64})/);
+  expect(hashMatch).not.toBeNull();
+  if (hashMatch) {
+    const tx = await rpcCall(page, "eth_getTransactionByHash", [hashMatch[1]]);
+    expect(tx?.from?.toLowerCase()).toBe(demoBuyerAddress().toLowerCase());
+  }
+  await expect(page.locator("#txOut")).toContainText("confirmed", { timeout: 120_000 });
+  await expect(page).toHaveURL(/#\/purchases/);
+  await expect(page.getByText("购买记录（Purchases）")).toBeVisible();
+
+  await page.getByRole("button", { name: "Load" }).click();
+  await expect(page.locator("#purchasesMeta")).toContainText("count=");
+  await expect(page.locator("#purchasesList")).toContainText("item=#");
 });
 
 test("plaza worker rate_limited shows actionable hint", async ({ page }) => {

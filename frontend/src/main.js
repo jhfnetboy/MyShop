@@ -4,13 +4,10 @@ import { loadConfig } from "./config.js";
 import {
   createMyShopReadClient,
   decodeShopRolesMask,
+  getDefaultShopRoleConfig,
   erc20Abi,
   myShopItemsAbi,
-  myShopsAbi,
-  SHOP_ROLE_ITEM_ACTION_EDITOR,
-  SHOP_ROLE_ITEM_EDITOR,
-  SHOP_ROLE_ITEM_MAINTAINER,
-  SHOP_ROLE_SHOP_ADMIN
+  myShopsAbi
 } from "./contracts.js";
 
 const envCfg = loadConfig();
@@ -50,7 +47,9 @@ function getRuntimeConfig() {
     shopsAddress: stored.shopsAddress || envCfg.shopsAddress || "",
     itemsAddress: stored.itemsAddress || envCfg.itemsAddress || "",
     workerUrl: stored.workerUrl || envCfg.workerUrl || "",
-    workerApiUrl: stored.workerApiUrl || envCfg.workerApiUrl || ""
+    workerApiUrl: stored.workerApiUrl || envCfg.workerApiUrl || "",
+    apntsSaleUrl: stored.apntsSaleUrl || envCfg.apntsSaleUrl || "",
+    gtokenSaleUrl: stored.gtokenSaleUrl || envCfg.gtokenSaleUrl || ""
   };
 }
 
@@ -66,7 +65,22 @@ let connectedAddress = null;
 let connectedChainId = null;
 let walletEventsBound = false;
 let activeTxLabel = null;
-let lastTx = { label: null, hash: null, status: null, blockNumber: null };
+let lastTx = {
+  label: null,
+  hash: null,
+  status: null,
+  blockNumber: null,
+  startedAtMs: null,
+  submittedAtMs: null,
+  confirmedAtMs: null,
+  error: null
+};
+let buyFlow = {
+  approve: { status: null, hash: null, updatedAtMs: null, error: null },
+  buy: { status: null, hash: null, updatedAtMs: null, error: null },
+  active: null
+};
+let roleConfigState = getDefaultShopRoleConfig();
 
 function setDisabledById(id, disabled) {
   const node = document.getElementById(id);
@@ -111,6 +125,72 @@ function setText(id, text) {
   document.getElementById(id).textContent = text;
 }
 
+function formatAge(ms) {
+  if (!ms) return "";
+  const s = Math.max(0, Math.floor((Date.now() - ms) / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  return `${m}m${r}s`;
+}
+
+function txStatusLabel(s) {
+  if (!s) return "";
+  if (s === "waiting_wallet") return "waiting wallet confirmation";
+  if (s === "pending") return "pending on-chain";
+  if (s === "success") return "confirmed";
+  if (s === "reverted") return "reverted";
+  if (s === "error") return "error";
+  return String(s);
+}
+
+function updateBuyFlowPanel() {
+  const panel = document.getElementById("buyFlowOut");
+  if (!panel) return;
+  const rows = [];
+  const pushRow = (label, data) => {
+    if (!data?.status && !data?.hash && !data?.error) return;
+    const status = txStatusLabel(data.status);
+    const age = formatAge(data.updatedAtMs);
+    const hash = data.hash ? shortHex(data.hash) : "";
+    const parts = [label];
+    if (status) parts.push(status);
+    if (hash) parts.push(`hash=${hash}`);
+    if (age) parts.push(`age=${age}`);
+    rows.push(parts.join(" "));
+    if (data.error) rows.push(String(data.error));
+  };
+  pushRow("approve", buyFlow.approve);
+  pushRow("buy", buyFlow.buy);
+  panel.textContent = rows.join("\n");
+}
+
+function setBuyFlowStep(step, status, { hash = null, error = null } = {}) {
+  if (!buyFlow[step]) return;
+  buyFlow = {
+    ...buyFlow,
+    active: step,
+    [step]: {
+      status,
+      hash: hash ?? buyFlow[step].hash,
+      updatedAtMs: Date.now(),
+      error
+    }
+  };
+  updateBuyFlowPanel();
+}
+
+function safeJson(value) {
+  return JSON.stringify(
+    value,
+    (_k, v) => {
+      if (typeof v === "bigint") return v.toString();
+      return v;
+    },
+    2
+  );
+}
+
 function updateTxPanel() {
   const panel = document.getElementById("txPanel");
   if (!panel) return;
@@ -120,10 +200,91 @@ function updateTxPanel() {
   const rows = [];
   if (activeTxLabel) rows.push(el("div", { text: `activeTx=${activeTxLabel}` }));
   if (lastTx?.label) rows.push(el("div", { text: `lastTxLabel=${lastTx.label}` }));
-  if (lastTx?.hash) rows.push(el("div", {}, [el("span", { text: "lastTx=" }), txLinkNode(lastTx.hash)]));
-  if (lastTx?.status)
-    rows.push(el("div", { text: `lastTxStatus=${lastTx.status}${lastTx.blockNumber ? ` block=${lastTx.blockNumber}` : ""}` }));
-  panel.appendChild(el("div", {}, [el("h3", { text: "Tx" }), ...rows]));
+  if (lastTx?.status) {
+    const age = formatAge(lastTx.startedAtMs);
+    rows.push(
+      el("div", {
+        text: `status=${txStatusLabel(lastTx.status)}${lastTx.blockNumber ? ` block=${lastTx.blockNumber}` : ""}${
+          age ? ` age=${age}` : ""
+        }`
+      })
+    );
+  }
+  if (lastTx?.submittedAtMs) rows.push(el("div", { text: `submittedAge=${formatAge(lastTx.submittedAtMs)}` }));
+  if (lastTx?.confirmedAtMs) rows.push(el("div", { text: `confirmedAge=${formatAge(lastTx.confirmedAtMs)}` }));
+  if (lastTx?.hash) {
+    const btnCopy = el("button", {
+      text: "Copy Hash",
+      style: "margin-left: 8px;",
+      onclick: async () => {
+        const text = String(lastTx.hash || "");
+        try {
+          if (navigator?.clipboard?.writeText) {
+            await navigator.clipboard.writeText(text);
+            setText("txOut", "tx hash copied");
+            return;
+          }
+        } catch {
+        }
+        setText("txOut", "copy not available; please select tx hash manually");
+      }
+    });
+    rows.push(el("div", {}, [el("span", { text: "tx=" }), txLinkNode(lastTx.hash), btnCopy]));
+  }
+  if (lastTx?.error) rows.push(el("div", { style: "color: #b91c1c;", text: String(lastTx.error) }));
+
+  const btnClear = el("button", {
+    text: "Clear",
+    onclick: () => {
+      lastTx = {
+        label: null,
+        hash: null,
+        status: null,
+        blockNumber: null,
+        startedAtMs: null,
+        submittedAtMs: null,
+        confirmedAtMs: null,
+        error: null
+      };
+      updateTxPanel();
+    }
+  });
+
+  const btnRefresh = el("button", {
+    text: "Refresh",
+    style: "margin-left: 8px;",
+    onclick: () => refreshLastTxStatus().catch(showTxError)
+  });
+
+  panel.appendChild(el("div", {}, [el("h3", { text: "Tx" }), btnClear, btnRefresh, ...rows]));
+}
+
+async function refreshLastTxStatus() {
+  const hash = lastTx?.hash;
+  if (!hash) return;
+  setText("txOut", `checking tx receipt: ${hash}`);
+  try {
+    const receipt = await publicClient.getTransactionReceipt({ hash });
+    const blockNumber = receipt.blockNumber != null ? String(receipt.blockNumber) : "";
+    lastTx = {
+      ...lastTx,
+      status: receipt.status,
+      blockNumber: blockNumber || null,
+      confirmedAtMs: receipt.status ? Date.now() : lastTx.confirmedAtMs,
+      error: null
+    };
+    updateTxPanel();
+    setText("txOut", `tx receipt: ${hash}\nstatus=${receipt.status}${blockNumber ? ` block=${blockNumber}` : ""}`);
+  } catch (e) {
+    const msg = getErrorText(e);
+    if (msg.toLowerCase().includes("transactionreceiptnotfound")) {
+      lastTx = { ...lastTx, status: "pending" };
+      updateTxPanel();
+      setText("txOut", `tx still pending: ${hash}`);
+      return;
+    }
+    throw e;
+  }
 }
 
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
@@ -335,30 +496,62 @@ function showTxError(e) {
   updateTxPanel();
 }
 
-async function runWriteTx({ label, buttonIds = [], write }) {
+async function runWriteTx({ label, buttonIds = [], write, onStatus }) {
   if (activeTxLabel) throw new Error(`transaction in progress: ${activeTxLabel}`);
   activeTxLabel = label;
-  lastTx = { label, hash: null, status: "waiting_wallet", blockNumber: null };
+  lastTx = {
+    label,
+    hash: null,
+    status: "waiting_wallet",
+    blockNumber: null,
+    startedAtMs: Date.now(),
+    submittedAtMs: null,
+    confirmedAtMs: null,
+    error: null
+  };
   updateTxPanel();
   setDisabledMany(buttonIds, true);
   try {
+    if (onStatus) onStatus("waiting_wallet", {});
     setText("txOut", `[${label}] waiting for wallet confirmation...`);
     const hash = await write();
-    lastTx = { label, hash, status: "pending", blockNumber: null };
+    if (onStatus) onStatus("pending", { hash });
+    lastTx = { ...lastTx, hash, status: "pending", submittedAtMs: Date.now(), error: null };
     updateTxPanel();
     setText("txOut", `[${label}] submitted: ${hash}\nstatus=pending`);
     const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: 120_000 });
     const blockNumber = receipt.blockNumber != null ? String(receipt.blockNumber) : "";
-    lastTx = { label, hash, status: receipt.status, blockNumber: blockNumber || null };
+    lastTx = { ...lastTx, hash, status: receipt.status, blockNumber: blockNumber || null, confirmedAtMs: Date.now() };
     updateTxPanel();
     setText("txOut", `[${label}] confirmed: ${hash}\nstatus=${receipt.status}${blockNumber ? ` block=${blockNumber}` : ""}`);
     if (receipt.status !== "success") {
+      if (onStatus) onStatus("reverted", { hash });
       const err = new Error("[TxReverted] transaction reverted");
       err.txHash = hash;
       err.receipt = receipt;
+      try {
+        const tx = await publicClient.getTransaction({ hash });
+        await publicClient.call({
+          to: tx.to,
+          data: tx.input,
+          from: tx.from,
+          value: tx.value,
+          blockNumber: receipt.blockNumber
+        });
+      } catch (revertErr) {
+        err.revertDetails = getErrorText(revertErr);
+        err.message = `[TxReverted] transaction reverted | ${err.revertDetails}`;
+      }
       throw err;
     }
+    if (onStatus) onStatus("success", { hash });
     return { hash, receipt };
+  } catch (e) {
+    const msg = formatError(e);
+    lastTx = { ...lastTx, status: lastTx?.hash ? lastTx.status : "error", error: msg };
+    if (onStatus) onStatus("error", { error: msg, hash: lastTx?.hash || null });
+    updateTxPanel();
+    throw e;
   } finally {
     setDisabledMany(buttonIds, false);
     activeTxLabel = null;
@@ -748,8 +941,17 @@ async function connect() {
   });
   const [addr] = await walletClient.requestAddresses();
   connectedAddress = getAddress(addr);
+  walletClient = createWalletClient({
+    chain,
+    transport: custom(window.ethereum),
+    account: connectedAddress
+  });
   connectedChainId = await getConnectedChainId();
   setText("conn", `connected: ${connectedAddress}`);
+  const buyRecipient = document.getElementById("buyRecipient");
+  if (buyRecipient && !String(buyRecipient.value || "").trim()) buyRecipient.value = connectedAddress;
+  const buyBuyer = document.getElementById("buyBuyer");
+  if (buyBuyer && !String(buyBuyer.value || "").trim()) buyBuyer.value = connectedAddress;
 
   if (!walletEventsBound && window.ethereum?.on) {
     walletEventsBound = true;
@@ -789,14 +991,14 @@ async function getConnectedChainId() {
 
 async function readItem() {
   const itemId = BigInt(val("itemIdRead"));
-  const itemsAddress = requireAddress(val("itemsAddress"), "itemsAddress");
+  const itemsAddress = requireAddress(getCurrentCfgValue("itemsAddress"), "itemsAddress");
   const item = await publicClient.readContract({
     address: itemsAddress,
     abi: myShopItemsAbi,
     functionName: "items",
     args: [itemId]
   });
-  setText("itemOut", JSON.stringify(item, null, 2));
+  setText("itemOut", safeJson(item));
 
   try {
     const payToken = pick(item, "payToken", 1);
@@ -1157,7 +1359,9 @@ async function fetchRiskSig() {
 
 async function fetchSerialExtraData() {
   const itemId = val("buyItemId");
-  const buyer = requireAddress(val("buyBuyer"), "buyer");
+  const buyer = connectedAddress ? getAddress(connectedAddress) : requireAddress(val("buyBuyer"), "buyer");
+  const buyerInput = document.getElementById("buyBuyer");
+  if (buyerInput) buyerInput.value = buyer;
   const serial = val("serial");
   const deadline = val("serialDeadline");
   const json = await workerPermitGet("/serial-permit", { itemId, buyer, serial, deadline });
@@ -1167,12 +1371,13 @@ async function fetchSerialExtraData() {
 
 async function approvePayToken() {
   if (!walletClient || !connectedAddress) throw new Error("connect wallet first");
-  const itemsAddress = requireAddress(val("itemsAddress"), "itemsAddress");
+  const itemsAddress = requireAddress(getCurrentCfgValue("itemsAddress"), "itemsAddress");
   const payToken = requireAddress(val("buyPayToken"), "buyPayToken");
   const amount = BigInt(val("buyApproveAmount") || "0");
   await runWriteTx({
     label: "approve",
     buttonIds: ["btnApprove", "btnBuy"],
+    onStatus: (status, meta) => setBuyFlowStep("approve", status, meta),
     write: () =>
       walletClient.writeContract({
         address: payToken,
@@ -1186,7 +1391,7 @@ async function approvePayToken() {
 
 async function buy() {
   if (!walletClient || !connectedAddress) throw new Error("connect wallet first");
-  const itemsAddress = requireAddress(val("itemsAddress"), "itemsAddress");
+  const itemsAddress = requireAddress(getCurrentCfgValue("itemsAddress"), "itemsAddress");
   const itemId = BigInt(val("buyItemId"));
   const quantity = BigInt(val("buyQty"));
   const recipient = requireAddress(val("buyRecipient"), "recipient");
@@ -1196,6 +1401,7 @@ async function buy() {
   await runWriteTx({
     label: `buy itemId=${itemId.toString()} qty=${quantity.toString()}`,
     buttonIds: ["btnApprove", "btnBuy"],
+    onStatus: (status, meta) => setBuyFlowStep("buy", status, meta),
     write: () =>
       walletClient.writeContract({
         address: itemsAddress,
@@ -1218,10 +1424,11 @@ async function setShopRolesTx() {
   const shopId = BigInt(val("shopIdRole"));
   const operator = requireAddress(val("roleOperator"), "operator");
 
-  const shopAdmin = document.getElementById("roleShopAdmin").checked ? 1 : 0;
-  const maintainer = document.getElementById("roleItemMaintainer").checked ? 2 : 0;
-  const editor = document.getElementById("roleItemEditor").checked ? 4 : 0;
-  const actionEditor = document.getElementById("roleItemActionEditor").checked ? 8 : 0;
+  const roleConfig = normalizeRoleConfig(roleConfigState);
+  const shopAdmin = document.getElementById("roleShopAdmin").checked ? roleConfig.shopAdmin : 0;
+  const maintainer = document.getElementById("roleItemMaintainer").checked ? roleConfig.itemMaintainer : 0;
+  const editor = document.getElementById("roleItemEditor").checked ? roleConfig.itemEditor : 0;
+  const actionEditor = document.getElementById("roleItemActionEditor").checked ? roleConfig.itemActionEditor : 0;
   const roles = shopAdmin | maintainer | editor | actionEditor;
 
   const hash = await walletClient.writeContract({
@@ -1525,7 +1732,26 @@ async function fetchJsonWithTimeout(url, timeoutMs) {
 }
 
 function decodeShopRoles(rolesMask) {
-  return decodeShopRolesMask(rolesMask).labels;
+  return decodeShopRolesMask(rolesMask, roleConfigState).labels;
+}
+
+function normalizeRoleConfig(roleConfig) {
+  const defaults = getDefaultShopRoleConfig();
+  return {
+    shopAdmin: Number(roleConfig?.shopAdmin ?? defaults.shopAdmin),
+    itemMaintainer: Number(roleConfig?.itemMaintainer ?? defaults.itemMaintainer),
+    itemEditor: Number(roleConfig?.itemEditor ?? defaults.itemEditor),
+    itemActionEditor: Number(roleConfig?.itemActionEditor ?? defaults.itemActionEditor)
+  };
+}
+
+function buildRoleMask(roleConfig, keys) {
+  const cfg = normalizeRoleConfig(roleConfig);
+  let mask = 0;
+  for (const key of keys) {
+    mask |= Number(cfg[key] ?? 0);
+  }
+  return mask;
 }
 
 function applyConfigFromInputs() {
@@ -1535,7 +1761,9 @@ function applyConfigFromInputs() {
     shopsAddress: val("shopsAddress") || "",
     itemsAddress: val("itemsAddress") || "",
     workerUrl: val("workerUrl") || "",
-    workerApiUrl: val("workerApiUrl") || ""
+    workerApiUrl: val("workerApiUrl") || "",
+    apntsSaleUrl: val("apntsSaleUrl") || "",
+    gtokenSaleUrl: val("gtokenSaleUrl") || ""
   };
   runtimeCfg = next;
   saveStoredConfig(next);
@@ -1561,7 +1789,62 @@ async function loadConfigFromWorker() {
 async function renderPlaza(container) {
   container.appendChild(el("h2", { text: "广场（All Shops）" }));
 
-  container.appendChild(el("div", { text: "数据源：默认 auto（优先 Worker Query API，失败则回退链上读取）。" }));
+  container.appendChild(el("div", { text: "多入口购买：aPNTs/GToken/Shop/Item。数据源默认 auto（优先 Worker Query API，失败则回退链上读取）。" }));
+
+  const apntsSaleUrl = String(runtimeCfg.apntsSaleUrl || "").trim();
+  const gtokenSaleUrl = String(runtimeCfg.gtokenSaleUrl || "").trim();
+
+  const buildSaleCard = ({ title, supports, url, internalHref }) => {
+    const externalRow = url
+      ? el("div", {}, [el("span", { text: "外部入口：" }), el("a", { href: url, target: "_blank", rel: "noreferrer", text: url })])
+      : el("div", { text: "外部入口：未配置" });
+    const btnPrimary = el("button", {
+      text: "打开内置购买页",
+      onclick: () => {
+        window.location.hash = internalHref;
+      }
+    });
+    const btnSecondary = el("button", {
+      text: url ? "打开外部入口" : "去配置外部入口",
+      style: "margin-left: 8px;",
+      onclick: () => {
+        if (url) {
+          window.open(url, "_blank", "noopener,noreferrer");
+          return;
+        }
+        window.location.hash = "#/config";
+      }
+    });
+    return el("div", {}, [
+      el("h3", { text: title }),
+      el("div", { text: `支持：${supports}` }),
+      el("div", {}, [el("span", { text: "内置页：" }), el("a", { href: internalHref, text: internalHref })]),
+      externalRow,
+      el("div", {}, [btnPrimary, btnSecondary])
+    ]);
+  };
+
+  container.appendChild(
+    el("div", {}, [
+      buildSaleCard({ title: "aPNTs 购买入口", supports: "USDT / USDC / ETH / WBTC", url: apntsSaleUrl, internalHref: "#/sale-apnts" }),
+      buildSaleCard({ title: "GToken 购买入口", supports: "ETH / WBTC / aPNTs", url: gtokenSaleUrl, internalHref: "#/sale-gtoken" })
+    ])
+  );
+
+  container.appendChild(
+    el("div", {}, [
+      el("h3", { text: "快速购买" }),
+      inputRow("itemId", "plazaQuickItemId", "1"),
+      el("button", {
+        text: "去买家入口",
+        onclick: () => {
+          const itemId = val("plazaQuickItemId");
+          if (itemId) routeState.buyerItemId = String(itemId);
+          window.location.hash = "#/buyer";
+        }
+      })
+    ])
+  );
 
   const sourceSelect = el("select", { id: "plazaSource" }, [
     el("option", { value: "auto", text: "auto" }),
@@ -1571,6 +1854,8 @@ async function renderPlaza(container) {
 
   container.appendChild(
     el("div", {}, [
+      inputRow("shopId filter(optional)", "plazaShopIdFilter", ""),
+      inputRow("itemId filter(optional)", "plazaItemIdFilter", ""),
       inputRow("shops limit", "plazaShopLimit", "20"),
       inputRow("items limit", "plazaItemLimit", "50"),
       el("div", {}, [el("label", { for: "plazaSource", text: "source" }), sourceSelect])
@@ -1589,23 +1874,33 @@ async function renderPlaza(container) {
     const source = val("plazaSource") || "auto";
     const fetchSource = source === "auto" ? undefined : source;
 
+    const shopIdFilterRaw = val("plazaShopIdFilter");
+    const itemIdFilterRaw = val("plazaItemIdFilter");
+    const shopIdFilter = shopIdFilterRaw ? String(Number(shopIdFilterRaw)) : "";
+    const itemIdFilter = itemIdFilterRaw ? String(Number(itemIdFilterRaw)) : "";
+
     const { shops } = await fetchShopList({ cursor: 1n, limit: shopLimit, source: fetchSource });
     const { items } = await fetchItemList({ cursor: 1n, limit: itemLimit, source: fetchSource });
 
     const shopsById = new Map();
     for (const s of shops) shopsById.set(String(s.shopId), s.shop);
 
+    const filteredShops = shopIdFilter ? shops.filter((s) => String(s.shopId) === shopIdFilter) : shops;
+    let filteredItems = items;
+    if (shopIdFilter) filteredItems = filteredItems.filter((it) => String(it.item.shopId) === shopIdFilter);
+    if (itemIdFilter) filteredItems = filteredItems.filter((it) => String(it.itemId) === itemIdFilter);
+
     listBox.appendChild(
       el("div", {
-        text: `loaded: shops(${shops.length}) ${sourceCountsLabel(shops, (s) => s?.shop?.__source)} items(${items.length}) ${sourceCountsLabel(
-          items,
+        text: `loaded: shops(${filteredShops.length}) ${sourceCountsLabel(filteredShops, (s) => s?.shop?.__source)} items(${filteredItems.length}) ${sourceCountsLabel(
+          filteredItems,
           (it) => it?.item?.__source
         )}`
       })
     );
 
-    const shopsEl = el("div", {}, [el("h3", { text: `Shops (${shops.length})` })]);
-    for (const s of shops) {
+    const shopsEl = el("div", {}, [el("h3", { text: `Shops (${filteredShops.length})` })]);
+    for (const s of filteredShops) {
       const shop = s.shop;
       shopsEl.appendChild(
         el("div", {}, [
@@ -1615,22 +1910,35 @@ async function renderPlaza(container) {
           addressNode(shop.owner),
           el("span", { text: " treasury=" }),
           addressNode(shop.treasury),
-          el("span", { text: ` paused=${shop.paused}` })
+          el("span", { text: ` paused=${shop.paused}` }),
+          el("button", {
+            text: "查看店铺",
+            style: "margin-left: 8px;",
+            onclick: () => {
+              window.location.hash = `#/shop/${s.shopId}`;
+            }
+          })
         ])
       );
     }
     listBox.appendChild(shopsEl);
 
-    const itemsEl = el("div", {}, [el("h3", { text: `Items (${items.length})` })]);
-    for (const it of items) {
+    const itemsEl = el("div", {}, [el("h3", { text: `Items (${filteredItems.length})` })]);
+    for (const it of filteredItems) {
       const item = it.item;
       const shop = shopsById.get(String(item.shopId));
+      const actionLabel = item.action && !isZeroAddress(item.action) ? shortHex(item.action) : "none";
+      const nftLabel = item.nftContract && !isZeroAddress(item.nftContract) ? shortHex(item.nftContract) : "none";
+      const actionBytes = parseBytesLen(item.actionData);
+      const tokenUriLabel = item.tokenURI ? shortText(item.tokenURI, 36) : "";
       itemsEl.appendChild(
         el("div", {}, [
           el("a", { href: `#/item/${it.itemId}`, text: `Item #${it.itemId}` }),
           el("span", {
             text: formatItemSummary(item, { includeShopId: true })
           }),
+          el("span", { text: ` mint=${nftLabel} action=${actionLabel}${actionBytes != null ? ` actionBytes=${actionBytes}` : ""}` }),
+          tokenUriLabel ? el("span", { text: ` tokenURI=${tokenUriLabel}` }) : null,
           shop ? el("span", {}, [el("span", { text: " shopOwner=" }), addressNode(shop.owner)]) : el("span", { text: "" }),
           el("button", {
             text: "Buy",
@@ -1651,7 +1959,299 @@ async function renderPlaza(container) {
   document.getElementById("plazaShopLimit").value = "20";
   document.getElementById("plazaItemLimit").value = "50";
   document.getElementById("plazaSource").value = "auto";
+  document.getElementById("plazaShopIdFilter").value = "";
+  document.getElementById("plazaItemIdFilter").value = "";
   await load();
+}
+
+async function renderApntsSalePage(container) {
+  const apntsSaleUrl = String(runtimeCfg.apntsSaleUrl || "").trim();
+  const hero = el("div", {
+    style:
+      "padding: 24px; border-radius: 16px; background: linear-gradient(135deg, #0f172a, #1e293b); color: #f8fafc; margin-bottom: 16px;"
+  });
+  hero.appendChild(el("div", { text: "aPNTs Sale" }));
+  hero.appendChild(el("h2", { text: "aPNTs 购买入口" }));
+  hero.appendChild(el("div", { text: "社区积分发行的统一入口，兼顾可扩展与风控治理。" }));
+  hero.appendChild(
+    el("div", { style: "margin-top: 12px;" }, [
+      el("span", { text: "支持：USDT / USDC / ETH / WBTC", style: "margin-right: 12px;" }),
+      el("span", { text: "风控：发行速率 + 限购 + 价格保护" })
+    ])
+  );
+  const primaryBtn = el("button", {
+    text: apntsSaleUrl ? "打开外部购买入口" : "去配置外部入口",
+    style: "margin-top: 16px;",
+    onclick: () => {
+      if (apntsSaleUrl) {
+        window.open(apntsSaleUrl, "_blank", "noopener,noreferrer");
+        return;
+      }
+      window.location.hash = "#/config";
+    }
+  });
+  const secondaryBtn = el("button", {
+    text: "查看广场商品",
+    style: "margin-left: 8px;",
+    onclick: () => {
+      window.location.hash = "#/plaza";
+    }
+  });
+  hero.appendChild(el("div", {}, [primaryBtn, secondaryBtn]));
+  container.appendChild(hero);
+
+  const grid = el("div", { style: "display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px;" });
+  const cardStyle = "border: 1px solid #e5e7eb; border-radius: 14px; padding: 16px; background: #ffffff;";
+  grid.appendChild(
+    el("div", { style: cardStyle }, [
+      el("h3", { text: "发行概览" }),
+      el("div", { text: "不限量但不可滥发，支持按社区设定发行速率与限额。" }),
+      el("div", { text: "当前策略：10%-20% 经济规模区间作为建议上限。" })
+    ])
+  );
+  grid.appendChild(
+    el("div", { style: cardStyle }, [
+      el("h3", { text: "支付方式" }),
+      el("div", { text: "稳定币：USDT / USDC" }),
+      el("div", { text: "主流资产：ETH / WBTC" }),
+      el("div", { text: "结算：进入 treasury + 可配置分润" })
+    ])
+  );
+  grid.appendChild(
+    el("div", { style: cardStyle }, [
+      el("h3", { text: "风控承诺" }),
+      el("div", { text: "发行速率限制 / 每地址限购 / 价格偏离保护" }),
+      el("div", { text: "参数变更需 timelock 观察期" })
+    ])
+  );
+  grid.appendChild(
+    el("div", { style: cardStyle }, [
+      el("h3", { text: "购买步骤" }),
+      el("div", { text: "1. 连接钱包并选择支付资产" }),
+      el("div", { text: "2. 确认风险提示与发行统计" }),
+      el("div", { text: "3. 提交购买并查看交易记录" })
+    ])
+  );
+  container.appendChild(grid);
+
+  const footer = el("div", { style: "margin-top: 16px; padding: 16px; border-radius: 14px; background: #f8fafc;" }, [
+    el("h3", { text: "发行统计预览" }),
+    el("div", { text: "总发行：--" }),
+    el("div", { text: "24h 发行：-- | 7d 发行：-- | 30d 发行：--" }),
+    el("div", { text: "Top Buyers：--" })
+  ]);
+  container.appendChild(footer);
+}
+
+async function renderGTokenSalePage(container) {
+  const gtokenSaleUrl = String(runtimeCfg.gtokenSaleUrl || "").trim();
+  const hero = el("div", {
+    style:
+      "padding: 24px; border-radius: 16px; background: linear-gradient(135deg, #0b1220, #0f766e); color: #ecfeff; margin-bottom: 16px;"
+  });
+  hero.appendChild(el("div", { text: "GToken Sale" }));
+  hero.appendChild(el("h2", { text: "GToken 购买入口" }));
+  hero.appendChild(el("div", { text: "21,000,000 固定上限，面向社区的质押与治理资产。" }));
+  hero.appendChild(
+    el("div", { style: "margin-top: 12px;" }, [
+      el("span", { text: "支持：ETH / WBTC / aPNTs", style: "margin-right: 12px;" }),
+      el("span", { text: "合规：上限控制 + 价格来源保护" })
+    ])
+  );
+  const primaryBtn = el("button", {
+    text: gtokenSaleUrl ? "打开外部购买入口" : "去配置外部入口",
+    style: "margin-top: 16px;",
+    onclick: () => {
+      if (gtokenSaleUrl) {
+        window.open(gtokenSaleUrl, "_blank", "noopener,noreferrer");
+        return;
+      }
+      window.location.hash = "#/config";
+    }
+  });
+  const secondaryBtn = el("button", {
+    text: "查看广场商品",
+    style: "margin-left: 8px;",
+    onclick: () => {
+      window.location.hash = "#/plaza";
+    }
+  });
+  hero.appendChild(el("div", {}, [primaryBtn, secondaryBtn]));
+  container.appendChild(hero);
+
+  const grid = el("div", { style: "display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px;" });
+  const cardStyle = "border: 1px solid #e5e7eb; border-radius: 14px; padding: 16px; background: #ffffff;";
+  grid.appendChild(
+    el("div", { style: cardStyle }, [
+      el("h3", { text: "供给上限" }),
+      el("div", { text: "最大铸币量：21,000,000" }),
+      el("div", { text: "合约强制校验 totalMinted + mintAmount <= CAP" })
+    ])
+  );
+  grid.appendChild(
+    el("div", { style: cardStyle }, [
+      el("h3", { text: "定价策略" }),
+      el("div", { text: "早期固定兑换率，稳定后支持预言机或 TWAP" }),
+      el("div", { text: "保护：最大滑点阈值 + 价格刷新窗口" })
+    ])
+  );
+  grid.appendChild(
+    el("div", { style: cardStyle }, [
+      el("h3", { text: "资金流向" }),
+      el("div", { text: "资产进入 treasury（多签）" }),
+      el("div", { text: "可配置分润到 shop / 社区基金" })
+    ])
+  );
+  grid.appendChild(
+    el("div", { style: cardStyle }, [
+      el("h3", { text: "购买指引" }),
+      el("div", { text: "1. 准备 ETH/WBTC/aPNTs" }),
+      el("div", { text: "2. 连接钱包并确认兑换率" }),
+      el("div", { text: "3. 查看交易记录与余额变化" })
+    ])
+  );
+  container.appendChild(grid);
+
+  const footer = el("div", { style: "margin-top: 16px; padding: 16px; border-radius: 14px; background: #f8fafc;" }, [
+    el("h3", { text: "发行统计预览" }),
+    el("div", { text: "已铸币总量：-- / 21,000,000" }),
+    el("div", { text: "24h 发行：-- | 7d 发行：-- | 30d 发行：--" }),
+    el("div", { text: "Top Buyers：--" })
+  ]);
+  container.appendChild(footer);
+}
+
+async function renderRiskPage(container) {
+  container.appendChild(el("h2", { text: "风险评估与可视化风控" }));
+  container.appendChild(
+    el("div", {
+      text: "基于社区性质、经济规模、发行占比与流动速度生成风险等级与建议上限。数值可模拟调整，用于验收展示。"
+    })
+  );
+
+  const form = el("div", { style: "margin-top: 12px; display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px;" });
+  form.appendChild(el("div", {}, [inputRow("社区名称", "riskCommunityName", "BreadDAO")]));
+  form.appendChild(el("div", {}, [inputRow("社区性质", "riskCommunityNature", "面包店 / 线下商户")]));
+  form.appendChild(el("div", {}, [inputRow("核心活动", "riskCommunityActivity", "每日线上订购与线下兑换")]));
+  form.appendChild(el("div", {}, [inputRow("经济规模估算(年, USD)", "riskEconomicScale", "200000")]));
+
+  const scaleSelect = el("select", { id: "riskScaleLevel" }, [
+    el("option", { value: "micro", text: "微型" }),
+    el("option", { value: "small", text: "小型" }),
+    el("option", { value: "medium", text: "中型" }),
+    el("option", { value: "large", text: "大型" })
+  ]);
+  form.appendChild(el("div", {}, [el("label", { for: "riskScaleLevel", text: "规模档位" }), scaleSelect]));
+
+  const ratioInput = el("input", { id: "riskIssuedRatio", type: "range", min: "0", max: "100", value: "35" });
+  const velocityInput = el("input", { id: "riskVelocity", type: "range", min: "0", max: "100", value: "55" });
+  form.appendChild(
+    el("div", {}, [
+      el("label", { for: "riskIssuedRatio", text: "已发行占比(%)" }),
+      ratioInput,
+      el("div", { id: "riskIssuedRatioLabel", text: "35%" })
+    ])
+  );
+  form.appendChild(
+    el("div", {}, [
+      el("label", { for: "riskVelocity", text: "流动速度(%)" }),
+      velocityInput,
+      el("div", { id: "riskVelocityLabel", text: "55%" })
+    ])
+  );
+
+  container.appendChild(form);
+
+  const stats = el("div", { style: "margin-top: 16px; display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px;" });
+  const statCard = (title, id) =>
+    el("div", { style: "border: 1px solid #e5e7eb; border-radius: 12px; padding: 12px; background: #ffffff;" }, [
+      el("div", { text: title }),
+      el("div", { id, style: "font-size: 20px; font-weight: 600;" })
+    ]);
+  stats.appendChild(statCard("风险等级", "riskLevel"));
+  stats.appendChild(statCard("风险系数", "riskScore"));
+  stats.appendChild(statCard("建议发行上限", "riskCap"));
+  stats.appendChild(statCard("更新时间", "riskUpdatedAt"));
+  container.appendChild(stats);
+
+  const chartBox = el("div", { style: "margin-top: 16px; border-radius: 14px; padding: 16px; background: #f8fafc;" });
+  chartBox.appendChild(el("h3", { text: "可视化概览" }));
+  const issuedBar = el("div", { style: "height: 10px; border-radius: 999px; background: #e2e8f0; overflow: hidden;" }, [
+    el("div", { id: "issuedBar", style: "height: 10px; width: 35%; background: #10b981;" })
+  ]);
+  const velocityBar = el("div", { style: "height: 10px; border-radius: 999px; background: #e2e8f0; overflow: hidden;" }, [
+    el("div", { id: "velocityBar", style: "height: 10px; width: 55%; background: #06b6d4;" })
+  ]);
+  chartBox.appendChild(el("div", { text: "发行占比" }));
+  chartBox.appendChild(issuedBar);
+  chartBox.appendChild(el("div", { style: "margin-top: 10px;", text: "流动速度" }));
+  chartBox.appendChild(velocityBar);
+  container.appendChild(chartBox);
+
+  const detailBox = el("div", { style: "margin-top: 16px; border-radius: 14px; padding: 16px; background: #ffffff; border: 1px solid #e5e7eb;" });
+  detailBox.appendChild(el("h3", { text: "发行统计" }));
+  detailBox.appendChild(el("div", { id: "riskStatsText" }));
+  container.appendChild(detailBox);
+
+  const scaleMap = {
+    micro: { label: "微型", capMin: 0.1, capMax: 0.15 },
+    small: { label: "小型", capMin: 0.1, capMax: 0.18 },
+    medium: { label: "中型", capMin: 0.12, capMax: 0.2 },
+    large: { label: "大型", capMin: 0.12, capMax: 0.22 }
+  };
+
+  function updateRiskView() {
+    const issuedRatio = Number(ratioInput.value || "0");
+    const velocity = Number(velocityInput.value || "0");
+    document.getElementById("riskIssuedRatioLabel").textContent = `${issuedRatio}%`;
+    document.getElementById("riskVelocityLabel").textContent = `${velocity}%`;
+
+    const scaleKey = String(scaleSelect.value || "small");
+    const scale = scaleMap[scaleKey] || scaleMap.small;
+    const econ = Number(val("riskEconomicScale") || "0");
+    const capMin = econ * scale.capMin;
+    const capMax = econ * scale.capMax;
+    const capLabel = econ ? `$${Math.round(capMin).toLocaleString()} - $${Math.round(capMax).toLocaleString()}` : "-";
+
+    const ratioRisk = issuedRatio <= 40 ? 20 : issuedRatio <= 50 ? 50 : issuedRatio <= 80 ? 75 : 95;
+    const velocityRisk = velocity >= 60 ? 10 : velocity >= 40 ? 30 : velocity >= 20 ? 55 : 75;
+    const scaleRisk = scaleKey === "micro" ? 70 : scaleKey === "small" ? 55 : scaleKey === "medium" ? 40 : 30;
+    const score = Math.min(100, Math.round(ratioRisk * 0.5 + velocityRisk * 0.3 + scaleRisk * 0.2));
+    const level = issuedRatio >= 80 ? "红色预警" : issuedRatio >= 50 ? "黄色预警" : "绿色稳定";
+    const color = level === "红色预警" ? "#dc2626" : level === "黄色预警" ? "#f59e0b" : "#16a34a";
+
+    document.getElementById("riskLevel").textContent = level;
+    document.getElementById("riskLevel").style.color = color;
+    document.getElementById("riskScore").textContent = `${score}/100`;
+    document.getElementById("riskCap").textContent = capLabel;
+    document.getElementById("riskUpdatedAt").textContent = new Date().toLocaleString();
+
+    document.getElementById("issuedBar").style.width = `${issuedRatio}%`;
+    document.getElementById("issuedBar").style.background = color;
+    document.getElementById("velocityBar").style.width = `${velocity}%`;
+
+    const name = val("riskCommunityName") || "-";
+    const nature = val("riskCommunityNature") || "-";
+    const activity = val("riskCommunityActivity") || "-";
+    const statsText = [
+      `社区：${name}（${nature}）`,
+      `核心活动：${activity}`,
+      `经济规模估算：${econ ? `$${Math.round(econ).toLocaleString()}` : "-"}`,
+      `发行占比：${issuedRatio}%｜流动速度：${velocity}%｜规模档位：${scale.label}`,
+      `风险系数：${score}/100（${level}）`
+    ];
+    document.getElementById("riskStatsText").textContent = statsText.join("\n");
+  }
+
+  ratioInput.addEventListener("input", updateRiskView);
+  velocityInput.addEventListener("input", updateRiskView);
+  scaleSelect.addEventListener("change", updateRiskView);
+  document.getElementById("riskCommunityName").addEventListener("input", updateRiskView);
+  document.getElementById("riskCommunityNature").addEventListener("input", updateRiskView);
+  document.getElementById("riskCommunityActivity").addEventListener("input", updateRiskView);
+  document.getElementById("riskEconomicScale").addEventListener("input", updateRiskView);
+
+  updateRiskView();
 }
 
 async function renderShopDetail(container, shopId) {
@@ -1994,6 +2594,7 @@ async function renderBuyer(container) {
   container.appendChild(
     el("div", {}, [
       el("h3", { text: "Buy" }),
+      el("div", {}, [el("strong", { text: "Buy Status" }), el("pre", { id: "buyFlowOut" })]),
       inputRow("itemId", "buyItemId", routeState.buyerItemId || "1"),
       inputRow("qty", "buyQty", "1"),
       inputRow("recipient", "buyRecipient", connectedAddress || ""),
@@ -2060,6 +2661,14 @@ async function renderShopConsole(container, query = {}) {
     return;
   }
 
+  const roleConfig = normalizeRoleConfig(initialAccess.roleConfig);
+  roleConfigState = roleConfig;
+  const roleMaskShopAdmin = buildRoleMask(roleConfig, ["shopAdmin"]);
+  const roleMaskMaintainer = buildRoleMask(roleConfig, ["shopAdmin", "itemMaintainer"]);
+  const roleMaskEditor = buildRoleMask(roleConfig, ["shopAdmin", "itemEditor", "itemActionEditor"]);
+  const roleMaskActionEditor = buildRoleMask(roleConfig, ["shopAdmin", "itemActionEditor"]);
+  const roleMaskAll = buildRoleMask(roleConfig, ["shopAdmin", "itemMaintainer", "itemEditor", "itemActionEditor"]);
+
   const guardShop = ({ shopIdInputId, anyRolesMask = 0 }) => async (action) => {
     const shopId = BigInt(val(shopIdInputId));
     await requireShopAccess({ shopId, anyRolesMask });
@@ -2077,30 +2686,33 @@ async function renderShopConsole(container, query = {}) {
       inputRow("shopId", "shopIdRole", "1"),
       inputRow("operator", "roleOperator"),
       el("div", {}, [
-        el("label", {}, [el("input", { id: "roleShopAdmin", type: "checkbox" }), el("span", { text: " shop admin(1)" })])
+        el("label", {}, [
+          el("input", { id: "roleShopAdmin", type: "checkbox" }),
+          el("span", { text: ` shop admin(${roleConfig.shopAdmin})` })
+        ])
       ]),
       el("div", {}, [
         el("label", {}, [
           el("input", { id: "roleItemMaintainer", type: "checkbox", checked: true }),
-          el("span", { text: " item maintainer(2)" })
+          el("span", { text: ` item maintainer(${roleConfig.itemMaintainer})` })
         ])
       ]),
       el("div", {}, [
         el("label", {}, [
           el("input", { id: "roleItemEditor", type: "checkbox", checked: true }),
-          el("span", { text: " item editor(4)" })
+          el("span", { text: ` item editor(${roleConfig.itemEditor})` })
         ])
       ]),
       el("div", {}, [
         el("label", {}, [
           el("input", { id: "roleItemActionEditor", type: "checkbox", checked: true }),
-          el("span", { text: " item+action editor(8)" })
+          el("span", { text: ` item+action editor(${roleConfig.itemActionEditor})` })
         ])
       ]),
       el("button", {
         text: "Set Roles",
         onclick: () =>
-          guardShop({ shopIdInputId: "shopIdRole", anyRolesMask: SHOP_ROLE_SHOP_ADMIN })(() => setShopRolesTx()).catch(showTxError)
+          guardShop({ shopIdInputId: "shopIdRole", anyRolesMask: roleMaskShopAdmin })(() => setShopRolesTx()).catch(showTxError)
       })
     ])
   );
@@ -2133,7 +2745,7 @@ async function renderShopConsole(container, query = {}) {
       el("button", {
         text: "Update",
         onclick: () =>
-          guardShop({ shopIdInputId: "shopIdUpdateShop", anyRolesMask: SHOP_ROLE_SHOP_ADMIN })(() => updateShopTx()).catch(showTxError)
+          guardShop({ shopIdInputId: "shopIdUpdateShop", anyRolesMask: roleMaskShopAdmin })(() => updateShopTx()).catch(showTxError)
       })
     ])
   );
@@ -2148,7 +2760,7 @@ async function renderShopConsole(container, query = {}) {
       el("button", {
         text: "Set",
         onclick: () =>
-          guardShop({ shopIdInputId: "shopIdPause", anyRolesMask: SHOP_ROLE_SHOP_ADMIN })(() => setShopPausedTx()).catch(showTxError)
+          guardShop({ shopIdInputId: "shopIdPause", anyRolesMask: roleMaskShopAdmin })(() => setShopPausedTx()).catch(showTxError)
       })
     ])
   );
@@ -2163,9 +2775,7 @@ async function renderShopConsole(container, query = {}) {
       el("button", {
         text: "Set Active",
         onclick: () =>
-          guardItem({ itemIdInputId: "itemIdActive", anyRolesMask: SHOP_ROLE_SHOP_ADMIN | SHOP_ROLE_ITEM_MAINTAINER })(
-            () => setItemActiveTx()
-          ).catch(showTxError)
+          guardItem({ itemIdInputId: "itemIdActive", anyRolesMask: roleMaskMaintainer })(() => setItemActiveTx()).catch(showTxError)
       })
     ])
   );
@@ -2185,9 +2795,7 @@ async function renderShopConsole(container, query = {}) {
       el("button", {
         text: "Update Item",
         onclick: () =>
-          guardItem({ itemIdInputId: "itemIdUpdate", anyRolesMask: SHOP_ROLE_SHOP_ADMIN | SHOP_ROLE_ITEM_EDITOR | SHOP_ROLE_ITEM_ACTION_EDITOR })(
-            () => updateItemTx()
-          ).catch(showTxError)
+          guardItem({ itemIdInputId: "itemIdUpdate", anyRolesMask: roleMaskEditor })(() => updateItemTx()).catch(showTxError)
       })
     ])
   );
@@ -2203,9 +2811,7 @@ async function renderShopConsole(container, query = {}) {
       el("button", {
         text: "Update Action",
         onclick: () =>
-          guardItem({ itemIdInputId: "itemIdUpdateAction", anyRolesMask: SHOP_ROLE_SHOP_ADMIN | SHOP_ROLE_ITEM_ACTION_EDITOR })(() =>
-            updateItemActionTx()
-          ).catch(showTxError)
+          guardItem({ itemIdInputId: "itemIdUpdateAction", anyRolesMask: roleMaskActionEditor })(() => updateItemActionTx()).catch(showTxError)
       })
     ])
   );
@@ -2221,9 +2827,7 @@ async function renderShopConsole(container, query = {}) {
       el("button", {
         text: "Add Page Version",
         onclick: () =>
-          guardItem({ itemIdInputId: "itemIdPage", anyRolesMask: SHOP_ROLE_SHOP_ADMIN | SHOP_ROLE_ITEM_EDITOR | SHOP_ROLE_ITEM_ACTION_EDITOR })(() =>
-            addItemPageTx()
-          ).catch(showTxError)
+          guardItem({ itemIdInputId: "itemIdPage", anyRolesMask: roleMaskEditor })(() => addItemPageTx()).catch(showTxError)
       }),
       el("h4", { text: "Default Page" }),
       inputRow("itemId", "itemIdDefaultPage", "1"),
@@ -2233,7 +2837,7 @@ async function renderShopConsole(container, query = {}) {
         onclick: () =>
           guardItem({
             itemIdInputId: "itemIdDefaultPage",
-            anyRolesMask: SHOP_ROLE_SHOP_ADMIN | SHOP_ROLE_ITEM_EDITOR | SHOP_ROLE_ITEM_ACTION_EDITOR
+            anyRolesMask: roleMaskEditor
           })(() => setDefaultItemPageTx()).catch(showTxError)
       })
     ])
@@ -2265,8 +2869,7 @@ async function renderShopConsole(container, query = {}) {
         onclick: () =>
           guardShop({
             shopIdInputId: "shopIdAdd",
-            anyRolesMask:
-              SHOP_ROLE_SHOP_ADMIN | SHOP_ROLE_ITEM_MAINTAINER | SHOP_ROLE_ITEM_EDITOR | SHOP_ROLE_ITEM_ACTION_EDITOR
+            anyRolesMask: roleMaskAll
           })(() => addItem()).catch(showTxError)
       })
     ])
@@ -2289,8 +2892,7 @@ async function renderShopConsole(container, query = {}) {
         onclick: () =>
           guardShop({
             shopIdInputId: "shopIdExport",
-            anyRolesMask:
-              SHOP_ROLE_SHOP_ADMIN | SHOP_ROLE_ITEM_MAINTAINER | SHOP_ROLE_ITEM_EDITOR | SHOP_ROLE_ITEM_ACTION_EDITOR
+            anyRolesMask: roleMaskAll
           })(() => importShopItemsTx()).catch(showTxError)
       })
     ])
@@ -2375,10 +2977,11 @@ async function getShopAccess({ shopId, actor }) {
   const owners = await myshop.getProtocolOwners();
   const shopOwner = await myshop.getShopOwner(shopId);
   const rolesMask = await myshop.getShopRolesMask(shopId, actor);
+  const roleConfig = await myshop.getRoleConfig();
   const isProtocolOwner = myshop.isProtocolOwner(owners, actor);
   const isShopOwner = shopOwner === actor;
 
-  return { isProtocolOwner, isShopOwner, rolesMask, shopOwner };
+  return { isProtocolOwner, isShopOwner, rolesMask, shopOwner, roleConfig };
 }
 
 async function requireShopAccess({ shopId, anyRolesMask = 0, allowProtocolOwner = true, allowShopOwner = true }) {
@@ -2430,6 +3033,8 @@ async function renderConfig(container) {
       inputRow("ITEMS_ADDRESS", "itemsAddress"),
       inputRow("WORKER_URL (permit)", "workerUrl"),
       inputRow("WORKER_API_URL (query)", "workerApiUrl"),
+      inputRow("APNTS_SALE_URL", "apntsSaleUrl"),
+      inputRow("GTOKEN_SALE_URL", "gtokenSaleUrl"),
       el("button", {
         text: "Fill from env",
         onclick: () => {
@@ -2439,6 +3044,8 @@ async function renderConfig(container) {
           document.getElementById("itemsAddress").value = envCfg.itemsAddress || "";
           document.getElementById("workerUrl").value = envCfg.workerUrl || "";
           document.getElementById("workerApiUrl").value = envCfg.workerApiUrl || "";
+          document.getElementById("apntsSaleUrl").value = envCfg.apntsSaleUrl || "";
+          document.getElementById("gtokenSaleUrl").value = envCfg.gtokenSaleUrl || "";
         }
       }),
       el("button", {
@@ -2450,6 +3057,8 @@ async function renderConfig(container) {
           document.getElementById("itemsAddress").value = runtimeCfg.itemsAddress || "";
           document.getElementById("workerUrl").value = runtimeCfg.workerUrl || "";
           document.getElementById("workerApiUrl").value = runtimeCfg.workerApiUrl || "";
+          document.getElementById("apntsSaleUrl").value = runtimeCfg.apntsSaleUrl || "";
+          document.getElementById("gtokenSaleUrl").value = runtimeCfg.gtokenSaleUrl || "";
         }
       }),
       el("button", { text: "Load from Worker /config", onclick: () => loadConfigFromWorker().catch(showTxError) }),
@@ -2463,6 +3072,8 @@ async function renderConfig(container) {
   document.getElementById("itemsAddress").value = runtimeCfg.itemsAddress || "";
   document.getElementById("workerUrl").value = runtimeCfg.workerUrl || "";
   document.getElementById("workerApiUrl").value = runtimeCfg.workerApiUrl || "";
+  document.getElementById("apntsSaleUrl").value = runtimeCfg.apntsSaleUrl || "";
+  document.getElementById("gtokenSaleUrl").value = runtimeCfg.gtokenSaleUrl || "";
 }
 
 async function renderRolesPage(container, query = {}) {
@@ -2489,34 +3100,58 @@ async function renderRolesPage(container, query = {}) {
     if (!connectedAddress) throw new Error("请先连接钱包");
     const shopId = BigInt(val("rolesShopId"));
     const actor = getAddress(connectedAddress);
-    const owners = await getProtocolOwners();
-    const access = await getShopAccess({ shopId, actor });
-    const roles = decodeShopRoles(access.rolesMask);
-    const pageAccess = {
-      plaza: true,
-      buyer: !!connectedAddress,
-      purchases: true,
-      roles: !!connectedAddress,
-      shopConsole: access.isProtocolOwner || access.isShopOwner || access.rolesMask !== 0,
-      protocolConsole: access.isProtocolOwner
-    };
+    try {
+      const owners = await getProtocolOwners();
+      const access = await getShopAccess({ shopId, actor });
+      roleConfigState = normalizeRoleConfig(access.roleConfig);
+      const roles = decodeShopRoles(access.rolesMask);
+      const pageAccess = {
+        plaza: true,
+        buyer: !!connectedAddress,
+        purchases: true,
+        roles: !!connectedAddress,
+        shopConsole: access.isProtocolOwner || access.isShopOwner || access.rolesMask !== 0,
+        protocolConsole: access.isProtocolOwner
+      };
 
-    out.textContent = JSON.stringify(
-      {
-        actor,
-        protocolOwners: owners,
-        shopId: shopId.toString(),
-        shopOwner: access.shopOwner,
-        isProtocolOwner: access.isProtocolOwner,
-        isShopOwner: access.isShopOwner,
-        rolesMask: access.rolesMask,
-        roles,
-        pageAccess,
-        recommendedEntry: access.isProtocolOwner ? "protocol-console" : access.isShopOwner || roles.length ? "shop-console" : "buyer"
-      },
-      null,
-      2
-    );
+      out.textContent = JSON.stringify(
+        {
+          actor,
+          protocolOwners: owners,
+          shopId: shopId.toString(),
+          shopOwner: access.shopOwner,
+          isProtocolOwner: access.isProtocolOwner,
+          isShopOwner: access.isShopOwner,
+          rolesMask: access.rolesMask,
+          roleConfig: normalizeRoleConfig(access.roleConfig),
+          roles,
+          pageAccess,
+          recommendedEntry: access.isProtocolOwner ? "protocol-console" : access.isShopOwner || roles.length ? "shop-console" : "buyer"
+        },
+        null,
+        2
+      );
+    } catch (e) {
+      roleConfigState = normalizeRoleConfig(null);
+      const pageAccess = {
+        plaza: true,
+        buyer: !!connectedAddress,
+        purchases: true,
+        roles: !!connectedAddress,
+        shopConsole: false,
+        protocolConsole: false
+      };
+      out.textContent = JSON.stringify(
+        {
+          actor,
+          shopId: shopId.toString(),
+          error: formatError(e),
+          pageAccess
+        },
+        null,
+        2
+      );
+    }
   }
 
   await load();
@@ -2637,6 +3272,9 @@ function render() {
       : null,
     el("div", {}, [
       navLink("广场", "#/plaza"),
+      navLink("aPNTs 购买", "#/sale-apnts"),
+      navLink("GToken 购买", "#/sale-gtoken"),
+      navLink("风控评估", "#/risk"),
       navLink("买家", "#/buyer"),
       navLink("购买记录", "#/purchases"),
       navLink("角色", "#/roles"),
@@ -2719,6 +3357,18 @@ function render() {
 
       if (route.parts.length === 0 || route.parts[0] === "plaza") {
         await renderPlaza(main);
+        return;
+      }
+      if (route.parts[0] === "sale-apnts") {
+        await renderApntsSalePage(main);
+        return;
+      }
+      if (route.parts[0] === "sale-gtoken") {
+        await renderGTokenSalePage(main);
+        return;
+      }
+      if (route.parts[0] === "risk") {
+        await renderRiskPage(main);
         return;
       }
       if (route.parts[0] === "shop" && route.parts[1]) {

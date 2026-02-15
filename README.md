@@ -4,7 +4,7 @@
 
 - **On-chain**：`MyShops`（店铺注册与协议配置）+ `MyShopItems`（上架与原子购买 `buy()`）
 - **Worker**：Purchased 监听、Permit 签名 API（SerialPermit / RiskAllowance）、Query API（shops/items/purchases + 内存索引）
-- **Frontend**：广场 / 买家入口 / 店主后台 / 协议后台 + 诊断页
+- **Frontend**：广场 / aPNTs& GToken 购买页 / 风控评估 / 买家入口 / 店主后台 / 协议后台 + 诊断页
 
 常用入口：
 
@@ -153,6 +153,87 @@ sequenceDiagram
 ./flow-test.sh
 ```
 
+## 完整本地回归与分模块测试
+
+### 快速跑完整本地回归
+
+```bash
+./flow-test.sh
+```
+
+等价于：
+
+```bash
+RUN_E2E=1 bash scripts/regression_local.sh
+```
+
+仅跑后端回归（不跑前端 E2E）：
+
+```bash
+bash scripts/regression_local.sh
+```
+
+### 回归脚本参数与上下文
+
+`scripts/regression_local.sh` 会自动完成以下步骤：
+
+- 启动 anvil
+- 部署 demo 合约与基础数据
+- 启动 worker（permit + api + watch）
+- 运行成功与失败用例（串号购买、nonce 重放、deadline 过期、权限不足、暂停/下架）
+- 可选运行前端 E2E（当 `RUN_E2E=1`）
+
+脚本依赖工具：
+
+- anvil / forge / cast / node / pnpm / nc / curl
+
+常用参数与环境变量：
+
+- `ANVIL_PORT`：anvil 起始端口，脚本会自动找可用端口
+- `WORKER_PORT` / `API_PORT`：worker 与 api 起始端口，脚本会自动找可用端口
+- `DEPLOYER_PK` / `BUYER_PK`：演示部署与购买账户私钥
+- `RISK_SIGNER_PK` / `SERIAL_SIGNER_PK`：Risk/Serial 签名账户私钥
+- `RUN_E2E=1`：启用前端 E2E
+
+前端 E2E 会自动注入的上下文变量：
+
+- `RPC_URL` / `CHAIN_ID`
+- `ITEMS_ADDRESS` / `SHOPS_ADDRESS`
+- `WORKER_URL` / `WORKER_API_URL`
+- `ITEM_ID`
+
+回归输出位置：
+
+- `demo/demo.json`：部署与测试上下文
+- `demo/worker.log`：worker 运行日志
+- `demo/indexer_state.json`：indexer 持久化状态
+
+### 分模块测试命令
+
+合约（Foundry）：
+
+```bash
+./build-test-contracts.sh
+```
+
+Worker：
+
+```bash
+pnpm -C worker check
+pnpm -C worker test
+pnpm -C worker regression:worker
+```
+
+Frontend：
+
+```bash
+pnpm -C frontend check
+pnpm -C frontend typecheck
+pnpm -C frontend build
+pnpm -C frontend test:e2e
+pnpm -C frontend regression
+```
+
 ## 功能列表（feat）
 
 - **Shop**
@@ -185,7 +266,7 @@ Worker 的主要作用可以归成 3 类（对应你现在这套“链上协议 
 1. Purchased 监听（watch）
 
 - 目标：持续监听 `MyShopItems.Purchased` 事件，并把链上基础字段 + enrich 后的 shop/item 一起输出到 stdout / Webhook / Telegram。
-- 代码入口：[watchPurchased.js](file:///Users/jason/Dev/crypto-projects/MyShop/worker/src/watchPurchased.js)
+- 代码入口：[watchPurchased.js](./worker/src/watchPurchased.js)
 
 示例输出（关键字段）：
 
@@ -217,7 +298,7 @@ Worker 的主要作用可以归成 3 类（对应你现在这套“链上协议 
 2. Permit 签名 API（permit）
 
 - 目标：给前端/第三方应用提供 EIP-712 签名，链上可验证，避免在前端持有签名私钥。
-- 代码入口：[permitServer.js](file:///Users/jason/Dev/crypto-projects/MyShop/worker/src/permitServer.js)
+- 代码入口：[permitServer.js](./worker/src/permitServer.js)
 
 串号签名（SerialPermit → extraData，供 `buy()` 直接传入）：
 
@@ -238,7 +319,7 @@ curl "http://localhost:8787/risk-allowance?shopOwner=0xShopOwner&maxItems=10&dea
 3. Query API + 内存索引（api）
 
 - 目标：给广场/列表页提供快速查询：shops/items/purchases；优先走内存索引（快），必要时回退链上读取（全）。
-- 代码入口：[apiServer.js](file:///Users/jason/Dev/crypto-projects/MyShop/worker/src/apiServer.js)
+- 代码入口：[apiServer.js](./worker/src/apiServer.js)
 
 示例：
 
@@ -250,7 +331,7 @@ curl "http://localhost:8788/purchases?itemId=1&limit=20&include=enrich"
 
 前端对接（Plaza/Buyer/后台）：
 
-- [main.js](file:///Users/jason/Dev/crypto-projects/MyShop/frontend/src/main.js) 支持两个 URL：
+- [main.js](./frontend/src/main.js) 支持两个 URL：
   - `WORKER_URL`：Permit（/serial-permit, /risk-allowance）
   - `WORKER_API_URL`：Query（/shops, /items, /purchases），失败时自动回退链上读取
 - **一键演示 & 最小前端**

@@ -161,6 +161,13 @@ export const myShopsAbi = [
   },
   {
     type: "function",
+    name: "ROLE_SHOP_ADMIN",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "uint8" }]
+  },
+  {
+    type: "function",
     name: "ROLE_ITEM_EDITOR",
     stateMutability: "view",
     inputs: [],
@@ -416,20 +423,33 @@ export const SHOP_ROLE_ITEM_MAINTAINER = 2;
 export const SHOP_ROLE_ITEM_EDITOR = 4;
 export const SHOP_ROLE_ITEM_ACTION_EDITOR = 8;
 
-export function decodeShopRolesMask(rolesMask) {
+export function getDefaultShopRoleConfig() {
+  return {
+    shopAdmin: SHOP_ROLE_SHOP_ADMIN,
+    itemMaintainer: SHOP_ROLE_ITEM_MAINTAINER,
+    itemEditor: SHOP_ROLE_ITEM_EDITOR,
+    itemActionEditor: SHOP_ROLE_ITEM_ACTION_EDITOR
+  };
+}
+
+export function decodeShopRolesMask(rolesMask, roleConfig = getDefaultShopRoleConfig()) {
   const mask = Number(rolesMask ?? 0);
   const labels = [];
-  if ((mask & SHOP_ROLE_SHOP_ADMIN) !== 0) labels.push("shopAdmin(1)");
-  if ((mask & SHOP_ROLE_ITEM_MAINTAINER) !== 0) labels.push("itemMaintainer(2)");
-  if ((mask & SHOP_ROLE_ITEM_EDITOR) !== 0) labels.push("itemEditor(4)");
-  if ((mask & SHOP_ROLE_ITEM_ACTION_EDITOR) !== 0) labels.push("itemActionEditor(8)");
+  const shopAdmin = Number(roleConfig?.shopAdmin ?? SHOP_ROLE_SHOP_ADMIN);
+  const itemMaintainer = Number(roleConfig?.itemMaintainer ?? SHOP_ROLE_ITEM_MAINTAINER);
+  const itemEditor = Number(roleConfig?.itemEditor ?? SHOP_ROLE_ITEM_EDITOR);
+  const itemActionEditor = Number(roleConfig?.itemActionEditor ?? SHOP_ROLE_ITEM_ACTION_EDITOR);
+  if ((mask & shopAdmin) !== 0) labels.push(`shopAdmin(${shopAdmin})`);
+  if ((mask & itemMaintainer) !== 0) labels.push(`itemMaintainer(${itemMaintainer})`);
+  if ((mask & itemEditor) !== 0) labels.push(`itemEditor(${itemEditor})`);
+  if ((mask & itemActionEditor) !== 0) labels.push(`itemActionEditor(${itemActionEditor})`);
   return {
     rolesMask: mask,
     labels,
-    isShopAdmin: (mask & SHOP_ROLE_SHOP_ADMIN) !== 0,
-    isItemMaintainer: (mask & SHOP_ROLE_ITEM_MAINTAINER) !== 0,
-    isItemEditor: (mask & SHOP_ROLE_ITEM_EDITOR) !== 0,
-    isItemActionEditor: (mask & SHOP_ROLE_ITEM_ACTION_EDITOR) !== 0
+    isShopAdmin: (mask & shopAdmin) !== 0,
+    isItemMaintainer: (mask & itemMaintainer) !== 0,
+    isItemEditor: (mask & itemEditor) !== 0,
+    isItemActionEditor: (mask & itemActionEditor) !== 0
   };
 }
 
@@ -494,12 +514,53 @@ export function createMyShopReadClient({ publicClient, shopsAddress, itemsAddres
     return Number(BigInt(roles));
   }
 
+  async function getRoleConfig() {
+    if (!shops) return getDefaultShopRoleConfig();
+    try {
+      const [shopAdminRaw, itemMaintainerRaw, itemEditorRaw, itemActionEditorRaw] = await Promise.all([
+        publicClient.readContract({
+          address: shops,
+          abi: myShopsAbi,
+          functionName: "ROLE_SHOP_ADMIN",
+          args: []
+        }),
+        publicClient.readContract({
+          address: shops,
+          abi: myShopsAbi,
+          functionName: "ROLE_ITEM_MAINTAINER",
+          args: []
+        }),
+        publicClient.readContract({
+          address: shops,
+          abi: myShopsAbi,
+          functionName: "ROLE_ITEM_EDITOR",
+          args: []
+        }),
+        publicClient.readContract({
+          address: shops,
+          abi: myShopsAbi,
+          functionName: "ROLE_ITEM_ACTION_EDITOR",
+          args: []
+        })
+      ]);
+      return {
+        shopAdmin: Number(BigInt(shopAdminRaw)),
+        itemMaintainer: Number(BigInt(itemMaintainerRaw)),
+        itemEditor: Number(BigInt(itemEditorRaw)),
+        itemActionEditor: Number(BigInt(itemActionEditorRaw))
+      };
+    } catch {
+      return getDefaultShopRoleConfig();
+    }
+  }
+
   return {
     shopsAddress: shops,
     itemsAddress: items,
     getProtocolOwners,
     isProtocolOwner,
     getShopOwner,
-    getShopRolesMask
+    getShopRolesMask,
+    getRoleConfig
   };
 }

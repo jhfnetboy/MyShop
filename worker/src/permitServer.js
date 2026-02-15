@@ -38,6 +38,12 @@ export async function startPermitServer({
     chain,
     transport: httpTransport(rpcUrl)
   });
+  let domainChainId = chain.id;
+  try {
+    domainChainId = await publicClient.getChainId();
+  } catch {
+    domainChainId = chain.id;
+  }
 
   const walletClients = {
     serial: serialSignerPrivateKey
@@ -107,7 +113,7 @@ export async function startPermitServer({
         stats.okTotal += 1;
         _json(res, 200, {
           ok: true,
-          chainId: chain.id,
+          chainId: domainChainId,
           itemsAddress: getAddress(itemsAddress),
           serialSignerConfigured: walletClients.serial != null,
           riskSignerConfigured: walletClients.risk != null,
@@ -183,7 +189,7 @@ export async function startPermitServer({
         const serialHash = serialResult.serialHash;
 
         const signature = await walletClients.serial.signTypedData({
-          domain: { name: "MyShop", version: "1", chainId: chain.id, verifyingContract: getAddress(itemsAddress) },
+          domain: { name: "MyShop", version: "1", chainId: domainChainId, verifyingContract: getAddress(itemsAddress) },
           types: {
             SerialPermit: [
               { name: "itemId", type: "uint256" },
@@ -233,7 +239,7 @@ export async function startPermitServer({
         const nonce = await _resolveNonce(publicClient, itemsAddress, shopOwner, url.searchParams.get("nonce"));
 
         const signature = await walletClients.risk.signTypedData({
-          domain: { name: "MyShop", version: "1", chainId: chain.id, verifyingContract: getAddress(itemsAddress) },
+          domain: { name: "MyShop", version: "1", chainId: domainChainId, verifyingContract: getAddress(itemsAddress) },
           types: {
             RiskAllowance: [
               { name: "shopOwner", type: "address" },

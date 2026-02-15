@@ -7,7 +7,7 @@
 - 当前已完成到：M3.5（Done for demo）—— 合约部署 → Worker(permit/api/watch) → 前端(广场/买家/店主后台/协议后台) 能衔接跑通。
 - 下一步目标：把系统变成“可反复验证、可回归、可上线”。
 
-参考：[Solution.md](file:///Users/jason/Dev/crypto-projects/MyShop/Solution.md#L402-L425)
+参考：[Solution.md](../Solution.md#L402-L425)
 
 ## 1. Milestone A：测试与回归基建（让“能跑”变成“可反复验证”）
 
@@ -69,9 +69,11 @@
 - C4：购买凭证与历史页（purchases 列表、筛选、交易链接、tokenId/serialHash 展示）
   - 状态：已完成（purchases 列表可展开 Proof，并支持复制；保留 tx/link/tokenId/serialHash）
 - C5：交易生命周期体验完善（approve/buy 进度、pending、重试、失败引导）
+  - 状态：已完成（买家入口增加 Buy Status，approve/buy 状态与 hash/age 同步展示）
 - C6：内置诊断与降级路径（RPC/链不匹配、Worker 不可用、429 限流提示、数据来源标识）
   - 状态：已完成（诊断页可 check rpc/worker；广场展示 shops/items 数据来源统计；429 提示包含等待秒数）
 - C7：补齐全角色最小 E2E 自动化（基于 test_cases.md 的核心 happy+fail 集）
+  - 状态：已完成（新增 roles/protocol-console 的最小 E2E 覆盖与钱包 gating 校验）
 
 **建议推进顺序（先定规则，再统一语义，再打磨路径，最后自动化固化）**
 
@@ -131,10 +133,16 @@
 2. 运行本地回归（与 CI 对齐）
 
 ```bash
+./flow-test.sh
+```
+
+等价于：
+
+```bash
 ./build-test-contracts.sh
 pnpm -C worker regression:worker
 pnpm -C frontend regression
-./scripts/regression_local.sh
+RUN_E2E=1 bash scripts/regression_local.sh
 ```
 
 #### 发布步骤（Release）
@@ -175,3 +183,12 @@ git push origin vX.Y.Z
 ## 5. 本周建议推进顺序（最小风险）
 
 - 先做 A（回归与用例可执行）→ 再做 B（Worker 持久化/可观测）→ 再做 C（体验）→ 并行 D（CI/配置/SDK）
+
+## 6. 待办（按优先级）
+
+- P0：D1 定义环境与地址版本结构（状态：已完成）
+- P1：D4 发布流程落地（含预检清单落地执行，状态：已完成）
+- P2：D2 最小 CI（合约 build/test、worker check/test、前端 build/check/e2e，状态：已完成）
+- P3：C5 交易生命周期体验完善（approve/buy/pending/success/fail，状态：已完成）
+- P4：C7 全角色最小 E2E 自动化补齐（状态：已完成）
+- P5：D3 SDK 整合（地址源对齐 + MyShop client，状态：已完成）
