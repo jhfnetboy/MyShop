@@ -48,6 +48,7 @@ function getRuntimeConfig() {
     itemsAddress: stored.itemsAddress || envCfg.itemsAddress || "",
     itemsActionAddress: stored.itemsActionAddress || envCfg.itemsActionAddress || "",
     erc721ActionAddress: stored.erc721ActionAddress || envCfg.erc721ActionAddress || "",
+    defaultTemplateId: stored.defaultTemplateId || envCfg.defaultTemplateId || "",
     workerUrl: stored.workerUrl || envCfg.workerUrl || "",
     workerApiUrl: stored.workerApiUrl || envCfg.workerApiUrl || "",
     apntsSaleUrl: stored.apntsSaleUrl || envCfg.apntsSaleUrl || "",
@@ -1877,6 +1878,7 @@ function applyConfigFromInputs() {
     itemsAddress: val("itemsAddress") || "",
     itemsActionAddress: val("itemsActionAddress") || "",
     erc721ActionAddress: val("erc721ActionAddress") || "",
+    defaultTemplateId: val("defaultTemplateId") || "",
     workerUrl: val("workerUrl") || "",
     workerApiUrl: val("workerApiUrl") || "",
     apntsSaleUrl: val("apntsSaleUrl") || "",
@@ -3086,7 +3088,9 @@ async function renderShopConsole(container, query = {}) {
               const actionAddr = getCurrentCfgValue("erc721ActionAddress");
               if (actionAddr) setInputValue("action", actionAddr);
               const nft = getAddress(val("nftContract"));
-              const templateId = BigInt(val("mintNftTemplateId") || "0");
+              let tidRaw = val("mintNftTemplateId");
+              if (!tidRaw) tidRaw = getCurrentCfgValue("defaultTemplateId") || "0";
+              const templateId = BigInt(tidRaw || "0");
               const payload = encodeAbiParameters([{ type: "uint256" }], [templateId]);
               const hex = encodeAbiParameters([{ type: "address" }, { type: "bytes" }], [nft, payload]);
               setInputValue("actionData", hex);
@@ -3178,7 +3182,9 @@ async function renderShopConsole(container, query = {}) {
             onclick: () => {
               try {
                 const nft = getAddress(val("mintNft"));
-                const templateId = BigInt(val("mintNftTemplateId") || "0");
+                let tidRaw = val("mintNftTemplateId");
+                if (!tidRaw) tidRaw = getCurrentCfgValue("defaultTemplateId") || "0";
+                const templateId = BigInt(tidRaw || "0");
                 const payload = encodeAbiParameters([{ type: "uint256" }], [templateId]);
                 const hex = encodeAbiParameters([{ type: "address" }, { type: "bytes" }], [nft, payload]);
                 setInputValue("actionData", hex);
@@ -3366,6 +3372,7 @@ async function renderConfig(container) {
       inputRow("ITEMS_ADDRESS", "itemsAddress"),
       inputRow("ITEMS_ACTION_ADDRESS (MintERC20Action)", "itemsActionAddress"),
       inputRow("ERC721_ACTION_ADDRESS (MintERC721Action)", "erc721ActionAddress"),
+      inputRow("ERC721_DEFAULT_TEMPLATE_ID (uint256)", "defaultTemplateId"),
       inputRow("WORKER_URL (permit)", "workerUrl"),
       inputRow("WORKER_API_URL (query)", "workerApiUrl"),
       inputRow("APNTS_SALE_URL", "apntsSaleUrl"),
@@ -3379,6 +3386,7 @@ async function renderConfig(container) {
           document.getElementById("itemsAddress").value = envCfg.itemsAddress || "";
           document.getElementById("itemsActionAddress").value = envCfg.itemsActionAddress || "";
           document.getElementById("erc721ActionAddress").value = envCfg.erc721ActionAddress || "";
+          document.getElementById("defaultTemplateId").value = envCfg.defaultTemplateId || "";
           document.getElementById("workerUrl").value = envCfg.workerUrl || "";
           document.getElementById("workerApiUrl").value = envCfg.workerApiUrl || "";
           document.getElementById("apntsSaleUrl").value = envCfg.apntsSaleUrl || "";
@@ -3394,6 +3402,7 @@ async function renderConfig(container) {
           document.getElementById("itemsAddress").value = runtimeCfg.itemsAddress || "";
           document.getElementById("itemsActionAddress").value = runtimeCfg.itemsActionAddress || "";
           document.getElementById("erc721ActionAddress").value = runtimeCfg.erc721ActionAddress || "";
+          document.getElementById("defaultTemplateId").value = runtimeCfg.defaultTemplateId || "";
           document.getElementById("workerUrl").value = runtimeCfg.workerUrl || "";
           document.getElementById("workerApiUrl").value = runtimeCfg.workerApiUrl || "";
           document.getElementById("apntsSaleUrl").value = runtimeCfg.apntsSaleUrl || "";
@@ -3411,6 +3420,7 @@ async function renderConfig(container) {
   document.getElementById("itemsAddress").value = runtimeCfg.itemsAddress || "";
   document.getElementById("itemsActionAddress").value = runtimeCfg.itemsActionAddress || "";
   document.getElementById("erc721ActionAddress").value = runtimeCfg.erc721ActionAddress || "";
+  document.getElementById("defaultTemplateId").value = runtimeCfg.defaultTemplateId || "";
   document.getElementById("workerUrl").value = runtimeCfg.workerUrl || "";
   document.getElementById("workerApiUrl").value = runtimeCfg.workerApiUrl || "";
   document.getElementById("apntsSaleUrl").value = runtimeCfg.apntsSaleUrl || "";

@@ -14,7 +14,8 @@ export function loadConfig() {
     apntsSaleUrl: import.meta.env.VITE_APNTS_SALE_URL ?? defaults.apntsSaleUrl ?? "",
     gtokenSaleUrl: import.meta.env.VITE_GTOKEN_SALE_URL ?? defaults.gtokenSaleUrl ?? "",
     itemsActionAddress: import.meta.env.VITE_ITEMS_ACTION_ADDRESS ?? defaults.itemsActionAddress ?? "",
-    erc721ActionAddress: import.meta.env.VITE_ERC721_ACTION_ADDRESS ?? defaults.erc721ActionAddress ?? ""
+    erc721ActionAddress: import.meta.env.VITE_ERC721_ACTION_ADDRESS ?? defaults.erc721ActionAddress ?? "",
+    defaultTemplateId: import.meta.env.VITE_ERC721_DEFAULT_TEMPLATE_ID ?? defaults.defaultTemplateId ?? ""
   };
 
   const cfg = {
@@ -27,7 +28,8 @@ export function loadConfig() {
     apntsSaleUrl: raw.apntsSaleUrl ?? "",
     gtokenSaleUrl: raw.gtokenSaleUrl ?? "",
     itemsActionAddress: raw.itemsActionAddress ?? "",
-    erc721ActionAddress: raw.erc721ActionAddress ?? ""
+    erc721ActionAddress: raw.erc721ActionAddress ?? "",
+    defaultTemplateId: raw.defaultTemplateId ?? ""
   };
 
   return cfg;

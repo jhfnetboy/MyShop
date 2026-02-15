@@ -19,6 +19,7 @@
 - Worker：新增 /serial-permit-demo 示例页面（测试串号 Permit）
 - 前端：NFT+NFT 模板自动读取 ERC721_ACTION_ADDRESS 填充 action
 - 前端：新增模板按钮“NFT+NFT（按模板）”，自动生成 templateId 的 actionData
+- 前端：支持 ERC721 默认 templateId（env/local 配置），模板与生成器均可自动读取
 
 ### Changed
 - 合约售卖风控：APNTsSale / GTokenSale 增加价格保护
