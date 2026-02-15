@@ -3415,13 +3415,20 @@ async function renderDiagnostics(container) {
     const health = await safeHttpGet(base, "/health");
     const config = await safeHttpGet(base, "/config");
     const indexer = await safeHttpGet(base, "/indexer");
+    let riskSummary = null;
+    try {
+      riskSummary = await safeHttpGet(base, "/risk-summary");
+    } catch (e) {
+      riskSummary = { ok: false, error: getErrorText(e) };
+    }
     write({
       ok: true,
       kind: "worker_api",
       baseUrl: base,
       health,
       config,
-      indexer
+      indexer,
+      riskSummary
     });
     setText("txOut", "diagnostics: worker api ok");
   }
