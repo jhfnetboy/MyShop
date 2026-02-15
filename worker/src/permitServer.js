@@ -129,10 +129,10 @@ export async function startPermitServer({
       if (url.pathname === "/categories") {
         _requireMethod(req, ["GET"]);
         let categories = [
-          { id: "points", name: "NFT+积分卡" },
-          { id: "nft2nft", name: "NFT+NFT" },
-          { id: "physical", name: "NFT+实物（兑换码）" },
-          { id: "digital", name: "NFT+电子产品（密码/兑换码）" }
+          { id: "points", name: "NFT+积分卡", docsIpfs: "", readmeIpfs: "", architectureIpfs: "", templateIpfs: "" },
+          { id: "nft2nft", name: "NFT+NFT", docsIpfs: "", readmeIpfs: "", architectureIpfs: "", templateIpfs: "" },
+          { id: "physical", name: "NFT+实物（兑换码）", docsIpfs: "", readmeIpfs: "", architectureIpfs: "", templateIpfs: "" },
+          { id: "digital", name: "NFT+电子产品（密码/兑换码）", docsIpfs: "", readmeIpfs: "", architectureIpfs: "", templateIpfs: "" }
         ];
         try {
           const raw = process.env.MYSHOP_CATEGORIES_JSON;
@@ -142,7 +142,7 @@ export async function startPermitServer({
           }
         } catch {}
         stats.okTotal += 1;
-        _json(res, 200, { ok: true, categories });
+        _json(res, 200, { ok: true, categories, schema: { id: "string", name: "string", docsIpfs: "ipfs://", readmeIpfs: "ipfs://", architectureIpfs: "ipfs://", templateIpfs: "ipfs://" } });
         return;
       }
 

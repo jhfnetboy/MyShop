@@ -22,6 +22,8 @@
 - 前端：支持 ERC721 默认 templateId（env/local 配置），模板与生成器均可自动读取
 - 后端：新增 /categories 返回平台维护的商品类别元数据
 - 前端：Add Item 增加类别下拉，应用后锁定相关字段（继承使用，不可修改）
+- Worker：/categories 支持 IPFS 文档链接（docsIpfs/readmeIpfs/architectureIpfs/templateIpfs）
+- 文档：新增验收指南 [ACCEPTANCE.md](file:///Users/jason/Dev/crypto-projects/MyShop/docs/ACCEPTANCE.md)，补充 IPFS 要求与流程
 
 ### Changed
 - 合约售卖风控：APNTsSale / GTokenSale 增加价格保护

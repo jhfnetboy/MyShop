@@ -404,6 +404,16 @@ Action 的安全边界：
 - 前端：店主后台 Add Item 增加“类别”下拉；应用后自动填充并锁定相关字段（soulbound/requiresSerial/tokenURI/action）
 - 预置类别与模板一致：`points`、`nft2nft`、`physical`、`digital`
 
+#### 8.6.1 类别元数据 JSON Schema（IPFS）
+
+- 字段：`{ id: string, name: string, docsIpfs: ipfs://, readmeIpfs: ipfs://, architectureIpfs: ipfs://, templateIpfs: ipfs:// }`
+- 所有 `*Ipfs` 字段应上传并指向 IPFS；平台统一维护，商店继承使用、不可修改
+
+### 8.7 验收与部署指南
+
+- 验收流程与环境配置详见：[ACCEPTANCE.md](file:///Users/jason/Dev/crypto-projects/MyShop/docs/ACCEPTANCE.md)
+- 请确保所有文件链接统一采用 IPFS（包括商品页面与类别文档）
+
 为保证“链上可执行的限制”，建议采用“风控签名证明”：
 
 - MyShop 风控服务（Risk Oracle）对 `(shopOwner, maxItems, riskScoreHash, deadline, nonce)` 出具签名
