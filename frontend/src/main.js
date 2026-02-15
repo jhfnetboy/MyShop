@@ -3339,6 +3339,7 @@ async function renderDiagnostics(container) {
 
   const cfgBox = el("div", { id: "diagCfg" });
   const out = el("pre", { id: "diagOut" });
+  const riskBox = el("div", { id: "diagRiskBox", style: "margin-top: 12px; border: 1px solid #e5e7eb; border-radius: 12px; padding: 12px; background: #ffffff;" });
   container.appendChild(cfgBox);
   container.appendChild(
     el("div", {}, [
@@ -3349,6 +3350,7 @@ async function renderDiagnostics(container) {
     ])
   );
   container.appendChild(out);
+  container.appendChild(riskBox);
 
   function write(obj) {
     out.textContent = JSON.stringify(obj, null, 2);
@@ -3430,7 +3432,61 @@ async function renderDiagnostics(container) {
       indexer,
       riskSummary
     });
+    updateDiagRisk(riskSummary);
     setText("txOut", "diagnostics: worker api ok");
+  }
+
+  function updateDiagRisk(summary) {
+    riskBox.innerHTML = "";
+    riskBox.appendChild(el("h3", { text: "风险摘要（Risk Summary）" }));
+    if (!summary || summary.ok === false) {
+      riskBox.appendChild(el("div", { style: "color: #991b1b;", text: `不可用：${summary?.error || "unknown error"}` }));
+      return;
+    }
+    const level = computeRiskLevel(summary);
+    const color = level === "红色" ? "#dc2626" : level === "黄色" ? "#f59e0b" : "#16a34a";
+    const badge = el("span", {
+      text: `风险等级：${level}`,
+      style: `display:inline-block;padding:4px 8px;border-radius:999px;background:${color}20;color:${color};font-weight:600;margin-bottom:8px;`
+    });
+    riskBox.appendChild(badge);
+    riskBox.appendChild(kv("来源", String(summary.source || "-")));
+    riskBox.appendChild(kv("购买笔数", String(summary.totalPurchases ?? 0)));
+    riskBox.appendChild(kv("购买人数", String(summary.uniqueBuyers ?? 0)));
+    riskBox.appendChild(kv("活跃店铺", String(summary.uniqueShops ?? 0)));
+    riskBox.appendChild(kv("涉及商品", String(summary.uniqueItems ?? 0)));
+    riskBox.appendChild(kv("支付总额", String(summary.totalPayAmount ?? "0")));
+    riskBox.appendChild(kv("平台费", String(summary.totalPlatformFeeAmount ?? "0")));
+    if (summary.lastPurchaseAt || summary.lastPurchaseBlock) {
+      riskBox.appendChild(kv("最后购买时间", String(summary.lastPurchaseAt ?? "-")));
+      riskBox.appendChild(kv("最后购买区块", String(summary.lastPurchaseBlock ?? "-")));
+    }
+    if (Array.isArray(summary.topBuyers) && summary.topBuyers.length > 0) {
+      const list = el("div", {}, [el("div", { text: "Top Buyers" })]);
+      for (const b of summary.topBuyers) {
+        list.appendChild(
+          el("div", {}, [
+            addressNode(b.buyer),
+            el("span", { text: ` pay=${b.payAmount} purchases=${b.purchases}` })
+          ])
+        );
+      }
+      riskBox.appendChild(list);
+    }
+    if (Array.isArray(summary.topItems) && summary.topItems.length > 0) {
+      const list = el("div", {}, [el("div", { text: "Top Items" })]);
+      for (const it of summary.topItems) {
+        list.appendChild(el("div", { text: `#${it.itemId} pay=${it.payAmount} qty=${it.quantity} purchases=${it.purchases}` }));
+      }
+      riskBox.appendChild(list);
+    }
+  }
+
+  function computeRiskLevel(summary) {
+    const n = Number(summary?.totalPurchases ?? 0);
+    if (n >= 100) return "红色";
+    if (n >= 30) return "黄色";
+    return "绿色";
   }
 
   renderCfg();
