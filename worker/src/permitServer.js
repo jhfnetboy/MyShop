@@ -126,6 +126,26 @@ export async function startPermitServer({
         return;
       }
 
+      if (url.pathname === "/categories") {
+        _requireMethod(req, ["GET"]);
+        let categories = [
+          { id: "points", name: "NFT+积分卡" },
+          { id: "nft2nft", name: "NFT+NFT" },
+          { id: "physical", name: "NFT+实物（兑换码）" },
+          { id: "digital", name: "NFT+电子产品（密码/兑换码）" }
+        ];
+        try {
+          const raw = process.env.MYSHOP_CATEGORIES_JSON;
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed)) categories = parsed;
+          }
+        } catch {}
+        stats.okTotal += 1;
+        _json(res, 200, { ok: true, categories });
+        return;
+      }
+
       if (url.pathname === "/serial-permit-demo") {
         _requireMethod(req, ["GET"]);
         const html = `<!doctype html>

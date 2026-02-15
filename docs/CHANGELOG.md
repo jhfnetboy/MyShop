@@ -20,6 +20,8 @@
 - 前端：NFT+NFT 模板自动读取 ERC721_ACTION_ADDRESS 填充 action
 - 前端：新增模板按钮“NFT+NFT（按模板）”，自动生成 templateId 的 actionData
 - 前端：支持 ERC721 默认 templateId（env/local 配置），模板与生成器均可自动读取
+- 后端：新增 /categories 返回平台维护的商品类别元数据
+- 前端：Add Item 增加类别下拉，应用后锁定相关字段（继承使用，不可修改）
 
 ### Changed
 - 合约售卖风控：APNTsSale / GTokenSale 增加价格保护

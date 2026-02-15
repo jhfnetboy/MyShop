@@ -3130,6 +3130,71 @@ async function renderShopConsole(container, query = {}) {
           }
         })
       ]),
+      el("div", { style: "margin: 8px 0;" }, [
+        el("h4", { text: "类别（Category）" }),
+        el("select", { id: "categorySelect" }),
+        el("button", {
+          text: "加载类别",
+          style: "margin-left: 8px;",
+          onclick: async () => {
+            try {
+              const json = await workerApiGet("/categories");
+              const select = document.getElementById("categorySelect");
+              select.innerHTML = "";
+              const list = Array.isArray(json.categories) ? json.categories : [];
+              for (const c of list) {
+                const opt = document.createElement("option");
+                opt.value = String(c.id ?? "");
+                opt.textContent = String(c.name ?? c.id ?? "");
+                select.appendChild(opt);
+              }
+            } catch (e) {
+              showTxError(e);
+            }
+          }
+        }),
+        el("button", {
+          text: "应用类别",
+          style: "margin-left: 8px;",
+          onclick: () => {
+            const id = String(val("categorySelect") || "");
+            if (!id) return;
+            if (id === "points") {
+              setInputValue("soulbound", "true");
+              setInputValue("requiresSerial", "false");
+              setInputValue("tokenURI", "ipfs://membership-card");
+              const actionAddr = getCurrentCfgValue("itemsActionAddress");
+              if (actionAddr) setInputValue("action", actionAddr);
+              setInputValue("actionData", "0x");
+            } else if (id === "nft2nft") {
+              setInputValue("soulbound", "false");
+              setInputValue("requiresSerial", "false");
+              setInputValue("tokenURI", "ipfs://bundle-nft");
+              const actionAddr = getCurrentCfgValue("erc721ActionAddress");
+              if (actionAddr) setInputValue("action", actionAddr);
+              setInputValue("actionData", "0x");
+            } else if (id === "physical") {
+              setInputValue("soulbound", "false");
+              setInputValue("requiresSerial", "true");
+              setInputValue("tokenURI", "ipfs://physical-redeem");
+              setInputValue("action", "");
+              setInputValue("actionData", "0x");
+            } else if (id === "digital") {
+              setInputValue("soulbound", "false");
+              setInputValue("requiresSerial", "true");
+              setInputValue("tokenURI", "ipfs://digital-redeem");
+              setInputValue("action", "");
+              setInputValue("actionData", "0x");
+            }
+            setDisabledMany(["soulbound", "requiresSerial", "tokenURI", "action"], true);
+          }
+        }),
+        el("button", {
+          text: "解除类别限制",
+          style: "margin-left: 8px;",
+          onclick: () => setDisabledMany(["soulbound", "requiresSerial", "tokenURI", "action"], false)
+        })
+      ]),
       inputRow("shopId", "shopIdAdd", "1"),
       inputRow("payToken", "payToken"),
       inputRow("unitPrice", "unitPrice", "1000"),

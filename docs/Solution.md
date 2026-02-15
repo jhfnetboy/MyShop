@@ -398,6 +398,12 @@ Action 的安全边界：
 - 增加 `GET /serial-permit-demo`，提供表单演示 `/serial-permit` 的调用与返回
 - 便于店主/运营测试“实物/电子产品”发码链路（requiresSerial=true）
 
+### 8.6 商品类别元数据（不可修改，shop 继承）
+
+- 后端（Worker）：`GET /categories` 返回平台维护的类别列表，可通过 `MYSHOP_CATEGORIES_JSON` 环境变量覆盖
+- 前端：店主后台 Add Item 增加“类别”下拉；应用后自动填充并锁定相关字段（soulbound/requiresSerial/tokenURI/action）
+- 预置类别与模板一致：`points`、`nft2nft`、`physical`、`digital`
+
 为保证“链上可执行的限制”，建议采用“风控签名证明”：
 
 - MyShop 风控服务（Risk Oracle）对 `(shopOwner, maxItems, riskScoreHash, deadline, nonce)` 出具签名
