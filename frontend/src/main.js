@@ -919,6 +919,114 @@ async function fetchPurchases({ buyer, shopId, itemId, limit, source, fromBlock,
   };
 }
 
+async function fetchRiskSummary({ buyer, shopId, itemId, source } = {}) {
+  if (source === "auto") source = undefined;
+  const params = { buyer, shopId, itemId, source };
+  try {
+    const json = await workerApiGet("/risk-summary", params);
+    if (json?.ok) return json;
+    throw new Error("invalid worker response");
+  } catch (e) {
+    if (source === "index") throw e;
+  }
+  const res = await fetchPurchases({ buyer, shopId, itemId, limit: 500, source: "chain" });
+  const summary = buildRiskSummaryFromPurchases(res.purchases || []);
+  return { ok: true, source: "chain", ...summary };
+}
+
+function buildRiskSummaryFromPurchases(list) {
+  const buyerMap = new Map();
+  const itemMap = new Map();
+  const shopSet = new Set();
+  const itemSet = new Set();
+  let totalQuantity = 0n;
+  let totalPayAmount = 0n;
+  let totalPlatformFeeAmount = 0n;
+  let lastBlock = null;
+
+  const toBigInt = (value) => {
+    try {
+      if (value == null) return 0n;
+      return BigInt(value);
+    } catch {
+      return 0n;
+    }
+  };
+
+  for (const p of list) {
+    if (p.shopId != null) shopSet.add(String(p.shopId));
+    if (p.itemId != null) itemSet.add(String(p.itemId));
+    if (p.blockNumber != null) {
+      const b = Number(p.blockNumber);
+      if (lastBlock == null || b > lastBlock) lastBlock = b;
+    }
+
+    const quantity = toBigInt(p.quantity);
+    const payAmount = toBigInt(p.payAmount);
+    const feeAmount = toBigInt(p.platformFeeAmount);
+
+    totalQuantity += quantity;
+    totalPayAmount += payAmount;
+    totalPlatformFeeAmount += feeAmount;
+
+    if (p.buyer) {
+      const key = String(p.buyer).toLowerCase();
+      const prev = buyerMap.get(key) ?? { payAmount: 0n, purchases: 0 };
+      prev.payAmount += payAmount;
+      prev.purchases += 1;
+      buyerMap.set(key, prev);
+    }
+
+    if (p.itemId != null) {
+      const key = String(p.itemId);
+      const prev = itemMap.get(key) ?? { quantity: 0n, payAmount: 0n, purchases: 0 };
+      prev.quantity += quantity;
+      prev.payAmount += payAmount;
+      prev.purchases += 1;
+      itemMap.set(key, prev);
+    }
+  }
+
+  const topByValue = (map, field, limit) => {
+    const arr = [];
+    for (const [key, value] of map.entries()) {
+      arr.push({ key, ...value });
+    }
+    arr.sort((a, b) => {
+      if (a[field] === b[field]) return 0;
+      return a[field] > b[field] ? -1 : 1;
+    });
+    return arr.slice(0, limit);
+  };
+
+  const topBuyers = topByValue(buyerMap, "payAmount", 5).map((entry) => ({
+    buyer: entry.key,
+    payAmount: entry.payAmount.toString(),
+    purchases: entry.purchases
+  }));
+  const topItems = topByValue(itemMap, "payAmount", 5).map((entry) => ({
+    itemId: entry.key,
+    quantity: entry.quantity.toString(),
+    payAmount: entry.payAmount.toString(),
+    purchases: entry.purchases
+  }));
+
+  return {
+    totalPurchases: list.length,
+    totalQuantity: totalQuantity.toString(),
+    totalPayAmount: totalPayAmount.toString(),
+    totalPlatformFeeAmount: totalPlatformFeeAmount.toString(),
+    uniqueBuyers: buyerMap.size,
+    uniqueShops: shopSet.size,
+    uniqueItems: itemSet.size,
+    topBuyers,
+    topItems,
+    lastPurchaseBlock: lastBlock != null ? String(lastBlock) : null,
+    lastPurchaseAt: null,
+    updatedAt: new Date().toISOString()
+  };
+}
+
 async function fetchMetadataFromTokenUri(tokenURI) {
   const url = toHttpUri(tokenURI);
   if (!url) return null;
@@ -1856,6 +1964,7 @@ async function renderPlaza(container) {
     el("div", {}, [
       inputRow("shopId filter(optional)", "plazaShopIdFilter", ""),
       inputRow("itemId filter(optional)", "plazaItemIdFilter", ""),
+        inputRow("community owner(optional)", "plazaCommunityOwnerFilter", ""),
       inputRow("shops limit", "plazaShopLimit", "20"),
       inputRow("items limit", "plazaItemLimit", "50"),
       el("div", {}, [el("label", { for: "plazaSource", text: "source" }), sourceSelect])
@@ -1876,8 +1985,10 @@ async function renderPlaza(container) {
 
     const shopIdFilterRaw = val("plazaShopIdFilter");
     const itemIdFilterRaw = val("plazaItemIdFilter");
+    const communityOwnerRaw = val("plazaCommunityOwnerFilter");
     const shopIdFilter = shopIdFilterRaw ? String(Number(shopIdFilterRaw)) : "";
     const itemIdFilter = itemIdFilterRaw ? String(Number(itemIdFilterRaw)) : "";
+    const communityOwner = communityOwnerRaw ? communityOwnerRaw.trim().toLowerCase() : "";
 
     const { shops } = await fetchShopList({ cursor: 1n, limit: shopLimit, source: fetchSource });
     const { items } = await fetchItemList({ cursor: 1n, limit: itemLimit, source: fetchSource });
@@ -1889,6 +2000,16 @@ async function renderPlaza(container) {
     let filteredItems = items;
     if (shopIdFilter) filteredItems = filteredItems.filter((it) => String(it.item.shopId) === shopIdFilter);
     if (itemIdFilter) filteredItems = filteredItems.filter((it) => String(it.itemId) === itemIdFilter);
+    if (communityOwner) {
+      filteredItems = filteredItems.filter((it) => {
+        const shop = shopsById.get(String(it.item.shopId));
+        return shop?.owner && String(shop.owner).toLowerCase() === communityOwner;
+      });
+      for (let i = filteredShops.length - 1; i >= 0; i -= 1) {
+        const shopOwner = filteredShops[i]?.shop?.owner;
+        if (!shopOwner || String(shopOwner).toLowerCase() !== communityOwner) filteredShops.splice(i, 1);
+      }
+    }
 
     listBox.appendChild(
       el("div", {
@@ -1961,6 +2082,7 @@ async function renderPlaza(container) {
   document.getElementById("plazaSource").value = "auto";
   document.getElementById("plazaShopIdFilter").value = "";
   document.getElementById("plazaItemIdFilter").value = "";
+  document.getElementById("plazaCommunityOwnerFilter").value = "";
   await load();
 }
 
@@ -2190,7 +2312,16 @@ async function renderRiskPage(container) {
 
   const detailBox = el("div", { style: "margin-top: 16px; border-radius: 14px; padding: 16px; background: #ffffff; border: 1px solid #e5e7eb;" });
   detailBox.appendChild(el("h3", { text: "发行统计" }));
-  detailBox.appendChild(el("div", { id: "riskStatsText" }));
+  const statsMeta = el("div", { id: "riskStatsMeta", style: "margin-bottom: 8px; color: #64748b;" });
+  const statsTextEl = el("div", { id: "riskStatsText" });
+  detailBox.appendChild(statsMeta);
+  detailBox.appendChild(
+    el("button", {
+      text: "刷新统计",
+      onclick: () => loadRiskSummary().catch(showTxError)
+    })
+  );
+  detailBox.appendChild(statsTextEl);
   container.appendChild(detailBox);
 
   const scaleMap = {
@@ -2199,6 +2330,8 @@ async function renderRiskPage(container) {
     medium: { label: "中型", capMin: 0.12, capMax: 0.2 },
     large: { label: "大型", capMin: 0.12, capMax: 0.22 }
   };
+
+  let riskSummary = null;
 
   function updateRiskView() {
     const issuedRatio = Number(ratioInput.value || "0");
@@ -2224,7 +2357,8 @@ async function renderRiskPage(container) {
     document.getElementById("riskLevel").style.color = color;
     document.getElementById("riskScore").textContent = `${score}/100`;
     document.getElementById("riskCap").textContent = capLabel;
-    document.getElementById("riskUpdatedAt").textContent = new Date().toLocaleString();
+    const updatedAtText = riskSummary?.updatedAt ? new Date(riskSummary.updatedAt).toLocaleString() : new Date().toLocaleString();
+    document.getElementById("riskUpdatedAt").textContent = updatedAtText;
 
     document.getElementById("issuedBar").style.width = `${issuedRatio}%`;
     document.getElementById("issuedBar").style.background = color;
@@ -2240,7 +2374,37 @@ async function renderRiskPage(container) {
       `发行占比：${issuedRatio}%｜流动速度：${velocity}%｜规模档位：${scale.label}`,
       `风险系数：${score}/100（${level}）`
     ];
+    if (riskSummary?.totalPurchases != null) {
+      statsText.push(`统计来源：${riskSummary.source || "-"}`);
+      statsText.push(`购买笔数：${riskSummary.totalPurchases ?? 0}｜购买人数：${riskSummary.uniqueBuyers ?? 0}`);
+      statsText.push(`活跃店铺：${riskSummary.uniqueShops ?? 0}｜涉及商品：${riskSummary.uniqueItems ?? 0}`);
+      statsText.push(`支付总额：${riskSummary.totalPayAmount ?? "0"}｜平台费：${riskSummary.totalPlatformFeeAmount ?? "0"}`);
+      if (Array.isArray(riskSummary.topBuyers) && riskSummary.topBuyers.length > 0) {
+        statsText.push(
+          `Top Buyers：${riskSummary.topBuyers.map((b) => `${shortHex(b.buyer)}(${b.payAmount})`).join(", ")}`
+        );
+      }
+      if (Array.isArray(riskSummary.topItems) && riskSummary.topItems.length > 0) {
+        statsText.push(`Top Items：${riskSummary.topItems.map((it) => `#${it.itemId}(${it.payAmount})`).join(", ")}`);
+      }
+      if (riskSummary.lastPurchaseAt || riskSummary.lastPurchaseBlock) {
+        statsText.push(`最后购买：${riskSummary.lastPurchaseAt ?? "-"}｜block ${riskSummary.lastPurchaseBlock ?? "-"}`);
+      }
+    }
     document.getElementById("riskStatsText").textContent = statsText.join("\n");
+  }
+
+  async function loadRiskSummary() {
+    statsMeta.textContent = "加载统计中...";
+    try {
+      const res = await fetchRiskSummary({ source: "index" });
+      riskSummary = res;
+      statsMeta.textContent = `统计来源：${res.source || "-"}｜购买笔数：${res.totalPurchases ?? 0}`;
+    } catch (e) {
+      riskSummary = null;
+      statsMeta.textContent = `统计不可用：${e instanceof Error ? e.message : String(e)}`;
+    }
+    updateRiskView();
   }
 
   ratioInput.addEventListener("input", updateRiskView);
@@ -2252,6 +2416,7 @@ async function renderRiskPage(container) {
   document.getElementById("riskEconomicScale").addEventListener("input", updateRiskView);
 
   updateRiskView();
+  await loadRiskSummary();
 }
 
 async function renderShopDetail(container, shopId) {
@@ -2346,6 +2511,11 @@ function renderPurchasesList(container, { purchases, emptyText }) {
   }
   for (const p of purchases) {
     const serialHash = p.serialHash && String(p.serialHash) !== "0x0000000000000000000000000000000000000000000000000000000000000000" ? shortHex(p.serialHash) : "-";
+    const item = p.item || null;
+    const actionLabel = item?.action && !isZeroAddress(item.action) ? shortHex(item.action) : "none";
+    const nftLabel = item?.nftContract && !isZeroAddress(item.nftContract) ? shortHex(item.nftContract) : "none";
+    const actionBytes = item ? parseBytesLen(item.actionData) : null;
+    const tokenUriLabel = item?.tokenURI ? shortText(String(item.tokenURI), 64) : "";
     const proofBox = el("div", { style: "margin-left: 12px; display: none;" });
     const proofPre = el("pre", { style: "white-space: pre-wrap;" });
     const proof = buildPurchaseProof(p);
@@ -2392,6 +2562,12 @@ function renderPurchasesList(container, { purchases, emptyText }) {
           addressNode(p.recipient),
           btnToggle
         ]),
+        item
+          ? el("div", {
+            style: "margin-left: 18px; color: #64748b;",
+            text: `action=${actionLabel} actionBytes=${actionBytes ?? ""} nft=${nftLabel} tokenURI=${tokenUriLabel}`
+          })
+          : null,
         proofBox
       ])
     );
@@ -2416,6 +2592,7 @@ async function renderItemDetail(container, itemId) {
   out.appendChild(kv("nftContract", addressNode(item.nftContract)));
   out.appendChild(kv("action", item.action && !isZeroAddress(item.action) ? addressNode(item.action) : "none"));
   out.appendChild(kv("actionDataBytes", String(parseBytesLen(item.actionData) ?? "")));
+  out.appendChild(kv("actionData", item.actionData ? shortText(String(item.actionData), 80) : ""));
   const tokenUriHttp = toHttpUri(item.tokenURI);
   out.appendChild(kv("tokenURI", tokenUriHttp ? el("a", { href: tokenUriHttp, target: "_blank", rel: "noreferrer", text: tokenUriHttp }) : item.tokenURI));
 

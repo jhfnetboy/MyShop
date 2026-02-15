@@ -381,6 +381,44 @@ export async function startApiServer({ rpcUrl, chain, itemsAddress, port }) {
         });
       }
 
+      if (url.pathname === "/risk-summary") {
+        const buyer = url.searchParams.get("buyer");
+        const shopIdParam = url.searchParams.get("shopId");
+        const itemIdParam = url.searchParams.get("itemId");
+        const source = (url.searchParams.get("source") ?? "index").toLowerCase();
+        const useIndex = indexer.enabled && source !== "chain";
+
+        const args = {};
+        if (buyer) args.buyer = getAddress(buyer);
+        if (shopIdParam) args.shopId = BigInt(shopIdParam);
+        if (itemIdParam) args.itemId = BigInt(itemIdParam);
+
+        let list;
+        if (useIndex) {
+          list = indexer.purchases.slice();
+          if (args.buyer) list = list.filter((p) => p.buyer.toLowerCase() === args.buyer.toLowerCase());
+          if (args.shopId) list = list.filter((p) => p.shopId === args.shopId.toString());
+          if (args.itemId) list = list.filter((p) => p.itemId === args.itemId.toString());
+        } else {
+          const latest = await client.getBlockNumber();
+          const fromBlock = latest > 5000n ? latest - 5000n : 0n;
+          list = await _getPurchasesFromChain({
+            client,
+            chainId: chain.id,
+            itemsAddress: items,
+            fromBlock,
+            toBlock: latest,
+            args: Object.keys(args).length ? args : undefined,
+            limit: 2000,
+            includeEnrich: false,
+            cache
+          });
+        }
+
+        const summary = await _buildRiskSummary({ client, list, cache });
+        return _json(res, 200, { ok: true, source: useIndex ? "index" : "chain", ...summary });
+      }
+
       return _json(res, 404, { ok: false, error: "not_found" });
     } catch (e) {
       return _json(res, 400, { ok: false, error: e instanceof Error ? e.message : String(e) });
@@ -608,6 +646,111 @@ async function _getPurchasesFromIndex({
   }
 
   return enriched;
+}
+
+async function _buildRiskSummary({ client, list }) {
+  const buyerMap = new Map();
+  const itemMap = new Map();
+  const shopSet = new Set();
+  const itemSet = new Set();
+  let totalQuantity = 0n;
+  let totalPayAmount = 0n;
+  let totalPlatformFeeAmount = 0n;
+  let lastBlock = null;
+  let lastPurchaseAt = null;
+
+  for (const p of list) {
+    if (p.shopId != null) shopSet.add(String(p.shopId));
+    if (p.itemId != null) itemSet.add(String(p.itemId));
+    if (p.blockNumber != null) {
+      const b = Number(p.blockNumber);
+      if (lastBlock == null || b > lastBlock) lastBlock = b;
+    }
+
+    const quantity = _toBigInt(p.quantity);
+    const payAmount = _toBigInt(p.payAmount);
+    const platformFeeAmount = _toBigInt(p.platformFeeAmount);
+
+    totalQuantity += quantity;
+    totalPayAmount += payAmount;
+    totalPlatformFeeAmount += platformFeeAmount;
+
+    if (p.buyer) {
+      const key = String(p.buyer).toLowerCase();
+      const prev = buyerMap.get(key) ?? { payAmount: 0n, purchases: 0 };
+      prev.payAmount += payAmount;
+      prev.purchases += 1;
+      buyerMap.set(key, prev);
+    }
+
+    if (p.itemId != null) {
+      const key = String(p.itemId);
+      const prev = itemMap.get(key) ?? { quantity: 0n, payAmount: 0n, purchases: 0 };
+      prev.quantity += quantity;
+      prev.payAmount += payAmount;
+      prev.purchases += 1;
+      itemMap.set(key, prev);
+    }
+  }
+
+  if (lastBlock != null) {
+    try {
+      const block = await client.getBlock({ blockNumber: BigInt(lastBlock) });
+      if (block?.timestamp != null) {
+        lastPurchaseAt = new Date(Number(block.timestamp) * 1000).toISOString();
+      }
+    } catch {
+      lastPurchaseAt = null;
+    }
+  }
+
+  const topBuyers = _topByValue(buyerMap, "payAmount", 5).map((entry) => ({
+    buyer: entry.key,
+    payAmount: entry.payAmount.toString(),
+    purchases: entry.purchases
+  }));
+  const topItems = _topByValue(itemMap, "payAmount", 5).map((entry) => ({
+    itemId: entry.key,
+    quantity: entry.quantity.toString(),
+    payAmount: entry.payAmount.toString(),
+    purchases: entry.purchases
+  }));
+
+  return {
+    totalPurchases: list.length,
+    totalQuantity: totalQuantity.toString(),
+    totalPayAmount: totalPayAmount.toString(),
+    totalPlatformFeeAmount: totalPlatformFeeAmount.toString(),
+    uniqueBuyers: buyerMap.size,
+    uniqueShops: shopSet.size,
+    uniqueItems: itemSet.size,
+    topBuyers,
+    topItems,
+    lastPurchaseBlock: lastBlock != null ? String(lastBlock) : null,
+    lastPurchaseAt,
+    updatedAt: new Date().toISOString()
+  };
+}
+
+function _toBigInt(value) {
+  try {
+    if (value == null) return 0n;
+    return BigInt(value);
+  } catch {
+    return 0n;
+  }
+}
+
+function _topByValue(map, field, limit) {
+  const list = [];
+  for (const [key, value] of map.entries()) {
+    list.push({ key, ...value });
+  }
+  list.sort((a, b) => {
+    if (a[field] === b[field]) return 0;
+    return a[field] > b[field] ? -1 : 1;
+  });
+  return list.slice(0, limit);
 }
 
 async function _loadIndexerState({ indexer, chainId, itemsAddress }) {

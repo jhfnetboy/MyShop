@@ -152,6 +152,30 @@ pnpm -C frontend regression
 - sale 页面可展示清晰购买说明与入口按钮
 - 风控页面风险等级随占比变化正确切换（50% 黄、80% 红）
 
+### 5.6 广场社区过滤与动作/NFT 明细
+
+进入 `#/plaza`：
+
+1. 在 **community owner(optional)** 填入社区 owner 地址
+2. 点击 **Reload**（或任何刷新入口）
+3. 确认 Shop 与 Item 列表都只显示该 owner 对应数据
+
+进入 `#/item/:itemId`：
+
+1. 查看 item 基本字段与 actionData/actionDataBytes 输出
+2. 确认 tokenURI、action、nftContract 的展示正确
+
+进入 `#/purchases` 或 item detail 页的 **Recent Purchases**：
+
+1. 查看每条购买记录的 action/nft/tokenURI 摘要
+2. 展开 Proof 仍可复制购买凭证
+
+**通过标准**
+
+- plaza 按 community owner 过滤有效且不会混入其他 shop/item
+- item 详情包含 actionData/actionDataBytes 与 tokenURI 摘要
+- purchases 列表展示 action/nft/tokenURI 摘要且 Proof 正常
+
 ## 6. 关键参数说明（验收时可复用）
 
 若不使用一键脚本，可手动设置：

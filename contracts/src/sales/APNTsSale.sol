@@ -7,6 +7,8 @@ interface IERC20Mintable is IERC20 {
 }
 
 contract APNTsSale {
+    uint256 public constant BPS_DENOMINATOR = 10_000;
+
     address public owner;
     address public treasury;
     address public apnts;
@@ -15,16 +17,28 @@ contract APNTsSale {
 
     mapping(address => bool) public acceptedPayTokens;
     mapping(address => uint256) public ratePerPayToken;
+    mapping(address => PendingRate) public pendingRate;
+
+    uint256 public rateUpdateDelay;
+    uint256 public maxRateChangeBps;
 
     uint256 public totalMinted;
     uint256 public dailyMintCap;
     uint256 public perTxMintCap;
     mapping(uint256 => uint256) public mintedByDay;
 
+    struct PendingRate {
+        uint256 rate;
+        uint256 eta;
+    }
+
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
     event TreasuryUpdated(address indexed treasury);
     event Paused(bool paused);
     event PayTokenUpdated(address indexed token, bool accepted, uint256 ratePerToken);
+    event PayTokenRateQueued(address indexed token, uint256 ratePerToken, uint256 eta);
+    event RateUpdateDelaySet(uint256 delay);
+    event MaxRateChangeBpsSet(uint256 bps);
     event CapsUpdated(uint256 dailyMintCap, uint256 perTxMintCap);
     event Purchased(
         address indexed payer,
@@ -42,6 +56,10 @@ contract APNTsSale {
     error TransferFailed();
     error RateNotSet();
     error MintCapExceeded();
+    error RateUpdateNotReady();
+    error RateUpdateMissing();
+    error RateChangeTooLarge();
+    error InvalidBps();
 
     constructor(address apnts_, address treasury_) {
         if (apnts_ == address(0) || treasury_ == address(0)) revert InvalidAddress();
@@ -81,14 +99,50 @@ contract APNTsSale {
 
     function setPayToken(address token, bool accepted, uint256 ratePerToken) external onlyOwner {
         acceptedPayTokens[token] = accepted;
-        ratePerPayToken[token] = ratePerToken;
-        emit PayTokenUpdated(token, accepted, ratePerToken);
+        if (!accepted) {
+            ratePerPayToken[token] = 0;
+            delete pendingRate[token];
+            emit PayTokenUpdated(token, accepted, 0);
+            return;
+        }
+        if (ratePerToken == 0) {
+            ratePerPayToken[token] = 0;
+            delete pendingRate[token];
+            emit PayTokenUpdated(token, accepted, 0);
+            return;
+        }
+        if (rateUpdateDelay == 0) {
+            _applyRate(token, ratePerToken);
+            emit PayTokenUpdated(token, accepted, ratePerToken);
+            return;
+        }
+        _queueRate(token, ratePerToken);
+        emit PayTokenUpdated(token, accepted, ratePerPayToken[token]);
     }
 
     function setCaps(uint256 dailyMintCap_, uint256 perTxMintCap_) external onlyOwner {
         dailyMintCap = dailyMintCap_;
         perTxMintCap = perTxMintCap_;
         emit CapsUpdated(dailyMintCap_, perTxMintCap_);
+    }
+
+    function setRateUpdateDelay(uint256 delay) external onlyOwner {
+        rateUpdateDelay = delay;
+        emit RateUpdateDelaySet(delay);
+    }
+
+    function setMaxRateChangeBps(uint256 bps) external onlyOwner {
+        if (bps > BPS_DENOMINATOR) revert InvalidBps();
+        maxRateChangeBps = bps;
+        emit MaxRateChangeBpsSet(bps);
+    }
+
+    function applyPayTokenRate(address token) external onlyOwner {
+        PendingRate memory pending = pendingRate[token];
+        if (pending.rate == 0) revert RateUpdateMissing();
+        if (pending.eta > block.timestamp) revert RateUpdateNotReady();
+        _applyRate(token, pending.rate);
+        emit PayTokenUpdated(token, acceptedPayTokens[token], ratePerPayToken[token]);
     }
 
     function buyWithEth(address recipient, uint256 minOut) external payable notPaused returns (uint256 mintAmount) {
@@ -139,5 +193,25 @@ contract APNTsSale {
 
         emit Purchased(msg.sender, recipient, payToken, payAmount, mintAmount);
     }
-}
 
+    function _queueRate(address token, uint256 newRate) internal {
+        _enforceRateChange(token, newRate);
+        uint256 eta = block.timestamp + rateUpdateDelay;
+        pendingRate[token] = PendingRate({rate: newRate, eta: eta});
+        emit PayTokenRateQueued(token, newRate, eta);
+    }
+
+    function _applyRate(address token, uint256 newRate) internal {
+        _enforceRateChange(token, newRate);
+        ratePerPayToken[token] = newRate;
+        delete pendingRate[token];
+    }
+
+    function _enforceRateChange(address token, uint256 newRate) internal view {
+        uint256 limitBps = maxRateChangeBps;
+        uint256 currentRate = ratePerPayToken[token];
+        if (limitBps == 0 || currentRate == 0) return;
+        uint256 diff = currentRate > newRate ? currentRate - newRate : newRate - currentRate;
+        if (diff * BPS_DENOMINATOR > currentRate * limitBps) revert RateChangeTooLarge();
+    }
+}

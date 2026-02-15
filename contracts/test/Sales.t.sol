@@ -89,6 +89,35 @@ contract SalesTest is Test {
         apntsSale.buyWithToken(address(usdc), 1, recipient, 0);
     }
 
+    function test_apntsSale_rateUpdateDelay() external {
+        apntsSale.setRateUpdateDelay(1 days);
+        apntsSale.setPayToken(address(usdc), true, 1000);
+
+        assertEq(apntsSale.ratePerPayToken(address(usdc)), 0);
+
+        vm.prank(buyer);
+        vm.expectRevert(APNTsSale.RateNotSet.selector);
+        apntsSale.buyWithToken(address(usdc), 1_000_000, recipient, 0);
+
+        vm.expectRevert(APNTsSale.RateUpdateNotReady.selector);
+        apntsSale.applyPayTokenRate(address(usdc));
+
+        vm.warp(block.timestamp + 1 days);
+        apntsSale.applyPayTokenRate(address(usdc));
+
+        vm.prank(buyer);
+        uint256 out = apntsSale.buyWithToken(address(usdc), 1_000_000, recipient, 0);
+        assertEq(out, 1_000_000 * 1000);
+    }
+
+    function test_apntsSale_rateChangeBpsLimit() external {
+        apntsSale.setPayToken(address(usdc), true, 1000);
+        apntsSale.setMaxRateChangeBps(500);
+
+        vm.expectRevert(APNTsSale.RateChangeTooLarge.selector);
+        apntsSale.setPayToken(address(usdc), true, 2000);
+    }
+
     function test_gTokenSale_buyWithToken_wbtc() external {
         gTokenSale.setPayToken(address(wbtc), true, 1_000_000);
 
