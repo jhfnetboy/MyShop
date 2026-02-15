@@ -46,6 +46,7 @@ function getRuntimeConfig() {
     chainId: stored.chainId || envCfg.chainId || 31337,
     shopsAddress: stored.shopsAddress || envCfg.shopsAddress || "",
     itemsAddress: stored.itemsAddress || envCfg.itemsAddress || "",
+    itemsActionAddress: stored.itemsActionAddress || envCfg.itemsActionAddress || "",
     workerUrl: stored.workerUrl || envCfg.workerUrl || "",
     workerApiUrl: stored.workerApiUrl || envCfg.workerApiUrl || "",
     apntsSaleUrl: stored.apntsSaleUrl || envCfg.apntsSaleUrl || "",
@@ -1873,6 +1874,7 @@ function applyConfigFromInputs() {
     chainId: val("chainId") ? Number(val("chainId")) : 31337,
     shopsAddress: val("shopsAddress") || "",
     itemsAddress: val("itemsAddress") || "",
+    itemsActionAddress: val("itemsActionAddress") || "",
     workerUrl: val("workerUrl") || "",
     workerApiUrl: val("workerApiUrl") || "",
     apntsSaleUrl: val("apntsSaleUrl") || "",
@@ -3128,6 +3130,43 @@ async function renderShopConsole(container, query = {}) {
           }
         })
       ]),
+      el("div", { style: "margin: 8px 0;" }, [
+        el("h4", { text: "MintERC721 actionData builder" }),
+        inputRow("nft(address)", "mintNft", "0x..."),
+        inputRow("tokenURI(string)", "mintNftTokenURI", "ipfs://bundle"),
+        inputRow("templateId(uint256)", "mintNftTemplateId", ""),
+        el("div", {}, [
+          el("button", {
+            text: "Build by tokenURI",
+            onclick: () => {
+              try {
+                const nft = getAddress(val("mintNft"));
+                const uri = String(val("mintNftTokenURI") || "");
+                const payload = encodeAbiParameters([{ type: "string" }], [uri]);
+                const hex = encodeAbiParameters([{ type: "address" }, { type: "bytes" }], [nft, payload]);
+                setInputValue("actionData", hex);
+              } catch (e) {
+                showTxError(e);
+              }
+            }
+          }),
+          el("button", {
+            text: "Build by templateId",
+            style: "margin-left: 8px;",
+            onclick: () => {
+              try {
+                const nft = getAddress(val("mintNft"));
+                const templateId = BigInt(val("mintNftTemplateId") || "0");
+                const payload = encodeAbiParameters([{ type: "uint256" }], [templateId]);
+                const hex = encodeAbiParameters([{ type: "address" }, { type: "bytes" }], [nft, payload]);
+                setInputValue("actionData", hex);
+              } catch (e) {
+                showTxError(e);
+              }
+            }
+          })
+        ])
+      ]),
       inputRow("requiresSerial(true|false)", "requiresSerial", "true"),
       el("h4", { text: "Risk Allowance (optional)" }),
       inputRow("shopOwner", "riskShopOwner"),
@@ -3303,6 +3342,7 @@ async function renderConfig(container) {
       inputRow("CHAIN_ID", "chainId"),
       inputRow("SHOPS_ADDRESS", "shopsAddress"),
       inputRow("ITEMS_ADDRESS", "itemsAddress"),
+      inputRow("ITEMS_ACTION_ADDRESS (MintERC20Action)", "itemsActionAddress"),
       inputRow("WORKER_URL (permit)", "workerUrl"),
       inputRow("WORKER_API_URL (query)", "workerApiUrl"),
       inputRow("APNTS_SALE_URL", "apntsSaleUrl"),
@@ -3314,6 +3354,7 @@ async function renderConfig(container) {
           document.getElementById("chainId").value = envCfg.chainId ? String(envCfg.chainId) : "";
           document.getElementById("shopsAddress").value = envCfg.shopsAddress || "";
           document.getElementById("itemsAddress").value = envCfg.itemsAddress || "";
+          document.getElementById("itemsActionAddress").value = envCfg.itemsActionAddress || "";
           document.getElementById("workerUrl").value = envCfg.workerUrl || "";
           document.getElementById("workerApiUrl").value = envCfg.workerApiUrl || "";
           document.getElementById("apntsSaleUrl").value = envCfg.apntsSaleUrl || "";
@@ -3327,6 +3368,7 @@ async function renderConfig(container) {
           document.getElementById("chainId").value = runtimeCfg.chainId ? String(runtimeCfg.chainId) : "";
           document.getElementById("shopsAddress").value = runtimeCfg.shopsAddress || "";
           document.getElementById("itemsAddress").value = runtimeCfg.itemsAddress || "";
+          document.getElementById("itemsActionAddress").value = runtimeCfg.itemsActionAddress || "";
           document.getElementById("workerUrl").value = runtimeCfg.workerUrl || "";
           document.getElementById("workerApiUrl").value = runtimeCfg.workerApiUrl || "";
           document.getElementById("apntsSaleUrl").value = runtimeCfg.apntsSaleUrl || "";
@@ -3342,6 +3384,7 @@ async function renderConfig(container) {
   document.getElementById("chainId").value = runtimeCfg.chainId ? String(runtimeCfg.chainId) : "";
   document.getElementById("shopsAddress").value = runtimeCfg.shopsAddress || "";
   document.getElementById("itemsAddress").value = runtimeCfg.itemsAddress || "";
+  document.getElementById("itemsActionAddress").value = runtimeCfg.itemsActionAddress || "";
   document.getElementById("workerUrl").value = runtimeCfg.workerUrl || "";
   document.getElementById("workerApiUrl").value = runtimeCfg.workerApiUrl || "";
   document.getElementById("apntsSaleUrl").value = runtimeCfg.apntsSaleUrl || "";

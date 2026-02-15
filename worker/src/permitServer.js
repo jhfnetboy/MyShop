@@ -126,6 +126,67 @@ export async function startPermitServer({
         return;
       }
 
+      if (url.pathname === "/serial-permit-demo") {
+        _requireMethod(req, ["GET"]);
+        const html = `<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8"/>
+    <title>SerialPermit Demo</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <style>
+      body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", "Apple Color Emoji", "Segoe UI Emoji"; margin: 24px; }
+      .row { margin: 8px 0; }
+      input { width: 360px; padding: 6px 8px; }
+      button { padding: 6px 12px; }
+      pre { background: #f8fafc; border: 1px solid #e5e7eb; padding: 12px; border-radius: 8px; overflow: auto; }
+    </style>
+  </head>
+  <body>
+    <h2>SerialPermit 示例</h2>
+    <div class="row"><label>buyer(address)：<input id="buyer" placeholder="0x..."/></label></div>
+    <div class="row"><label>itemId(uint256)：<input id="itemId" placeholder="1"/></label></div>
+    <div class="row"><label>serial(字符串)：<input id="serial" placeholder="CARD-0001"/></label></div>
+    <div class="row"><label>deadline(秒时间戳)：<input id="deadline" placeholder="${Math.floor(Date.now()/1000)+3600}"/></label></div>
+    <div class="row"><label>nonce(可选)：<input id="nonce" placeholder=""/></label></div>
+    <div class="row"><button id="btn">请求 /serial-permit</button></div>
+    <h3>响应</h3>
+    <pre id="out"></pre>
+    <script>
+      const btn = document.getElementById('btn');
+      const out = document.getElementById('out');
+      btn.addEventListener('click', async () => {
+        try {
+          const buyer = document.getElementById('buyer').value.trim();
+          const itemId = document.getElementById('itemId').value.trim();
+          const serial = document.getElementById('serial').value.trim();
+          const deadline = document.getElementById('deadline').value.trim();
+          const nonce = document.getElementById('nonce').value.trim();
+          const qs = new URLSearchParams();
+          if (buyer) qs.set('buyer', buyer);
+          if (itemId) qs.set('itemId', itemId);
+          if (serial) qs.set('serial', serial);
+          if (deadline) qs.set('deadline', deadline);
+          if (nonce) qs.set('nonce', nonce);
+          const res = await fetch('/serial-permit?' + qs.toString());
+          const json = await res.json();
+          out.textContent = JSON.stringify(json, null, 2);
+        } catch (e) {
+          out.textContent = String(e && e.message ? e.message : e);
+        }
+      });
+    </script>
+  </body>
+</html>`;
+        res.writeHead(200, {
+          "content-type": "text/html; charset=utf-8",
+          "access-control-allow-origin": "*"
+        });
+        res.end(html);
+        stats.okTotal += 1;
+        return;
+      }
+
       if (url.pathname === "/metrics") {
         _requireMethod(req, ["GET"]);
         const lines = [];

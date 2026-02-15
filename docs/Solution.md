@@ -371,7 +371,10 @@ Action 的安全边界：
   - `action=MintERC20Action；actionData=abi.encode(token, amountPerUnit)`
 - NFT + NFT：
   - `soulbound=false`；`requiresSerial=false`
-  - `action=MintERC721Action（建议后续新增）；actionData=abi.encode(nftContract, tokenURI|templateId)`
+  - `action=MintERC721Action；actionData=abi.encode(nftContract, bytes payload)`
+  - `payload` 为二选一：
+    - `abi.encode(string tokenURI)`（按 URI 铸造）
+    - `abi.encode(uint256 templateId)`（按模板铸造）
 - NFT + 实物 / 电子产品：
   - `soulbound=false`；`requiresSerial=true`
   - `action=EmitEventAction 或留空（仅依赖 Purchased 事件+serialHash）`
@@ -381,6 +384,19 @@ Action 的安全边界：
 
 - 店主后台 Add Item 面板提供模板按钮，快速填充 `soulbound/requiresSerial/tokenURI/action/actionData` 预设
 - 提供 MintERC20 actionData builder，输入 `token` 与 `amountPerUnit` 自动生成 `actionData`
+- 提供 MintERC721 actionData builder：
+  - 输入 `nft` + `tokenURI`，生成 `abi.encode(address nft, abi.encode(string tokenURI))`
+  - 或输入 `nft` + `templateId`，生成 `abi.encode(address nft, abi.encode(uint256 templateId))`
+
+### 8.4 配置项
+
+- 新增前端运行时配置 `ITEMS_ACTION_ADDRESS`（MintERC20Action 地址），用于“NFT+积分卡”模板一键填充
+- 建议再增加 `ERC721_ACTION_ADDRESS`（MintERC721Action 地址），便于“NFT+NFT”模板一键填充（当前可手动粘贴）
+
+### 8.5 Worker 串号示例页
+
+- 增加 `GET /serial-permit-demo`，提供表单演示 `/serial-permit` 的调用与返回
+- 便于店主/运营测试“实物/电子产品”发码链路（requiresSerial=true）
 
 为保证“链上可执行的限制”，建议采用“风控签名证明”：
 

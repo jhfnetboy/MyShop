@@ -13,6 +13,10 @@
 - 风控评估页：增加风险色标徽章，统一视觉表达
 - 文档：Solution.md 增加“店铺 NFT + 积分卡商品”购买说明（配置字段、签名串号、原子执行）
 - 文档：新增“常用商品模板与抽象”，并在店主后台提供模板按钮与 MintERC20 actionData 生成器
+- 合约：新增 MintERC721Action（支持 tokenURI / templateId 两种模式）
+- 前端：配置页新增 ITEMS_ACTION_ADDRESS（MintERC20Action 地址），模板直接可用
+- 前端：新增 MintERC721 actionData 生成器（两种编码模式）
+- Worker：新增 /serial-permit-demo 示例页面（测试串号 Permit）
 
 ### Changed
 - 合约售卖风控：APNTsSale / GTokenSale 增加价格保护
