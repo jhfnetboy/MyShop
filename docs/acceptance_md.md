@@ -8,7 +8,7 @@
 - 合约/Worker/前端最小 CI 命令可稳定运行
 - 关键流程可在本地或测试环境复现（含成功 + 失败场景）
 
-对应里程碑定义见 [milestones.md](file:///Users/jason/Dev/crypto-projects/MyShop/docs/milestones.md#L88-L176)
+对应里程碑定义见 [milestones.md](./milestones.md#L88-L176)
 
 ## 2. 前置准备
 
@@ -39,10 +39,12 @@ RUN_E2E=1 bash ./scripts/regression_local.sh
 ```
 
 **通过标准**
+
 - 终端最后输出 `ok: regression passed`
 - 输出 `demo/demo.json` 与 `demo/worker.log` 路径
 
 **失败处理**
+
 - 若提示端口占用：重新执行（脚本会自动寻找空闲端口）
 - 若提示依赖缺失：按上文安装对应工具
 
@@ -55,6 +57,7 @@ bash ./build-test-contracts.sh
 ```
 
 **通过标准**
+
 - 所有 `forge test` 通过
 
 ### 4.2 Worker
@@ -64,6 +67,7 @@ pnpm -C worker regression:worker
 ```
 
 **通过标准**
+
 - `smoke ok` 输出出现
 
 ### 4.3 前端
@@ -73,6 +77,7 @@ pnpm -C frontend regression
 ```
 
 **通过标准**
+
 - `vite build` 成功
 - `playwright test` 完成，失败为 0
 
@@ -83,6 +88,7 @@ pnpm -C frontend regression
 默认本地地址：`http://127.0.0.1:5173/`
 
 页面入口：
+
 - 广场：`#/plaza`
 - 买家：`#/buyer`
 - 店主后台：`#/shop-console`
@@ -94,12 +100,14 @@ pnpm -C frontend regression
 在 `#/config` 页面点击 **Load from Worker /config**，再点击 **Save & Apply**。
 
 **通过标准**
+
 - 读取到 chainId / itemsAddress / shopsAddress
 - 页面顶部 service 状态显示 `permit=ok` 与 `api=ok`
 
 ### 5.3 买家购买闭环
 
 进入 `#/buyer`：
+
 1. 点击 **Connect Wallet**
 2. 点击 **Read Item**，确认 item 信息输出
 3. 点击 **Approve**
@@ -107,16 +115,19 @@ pnpm -C frontend regression
 5. 点击 **Buy**
 
 **通过标准**
+
 - Buy Status 显示 approve/buy 的 hash 与状态
 - 最终跳转到 `#/purchases`，能看到新购买记录
 
 ### 5.4 失败场景提示
 
 在 `#/buyer` 页面：
+
 - 将 serialDeadline 改成过去时间再购买
 - 期望出现可操作提示（SignatureExpired/InvalidSignature/NonceUsed 等）
 
 **通过标准**
+
 - 错误提示包含明确的修复建议（例如重新获取 extraData）
 
 ## 6. 关键参数说明（验收时可复用）
@@ -143,7 +154,7 @@ VITE_WORKER_URL=
 VITE_WORKER_API_URL=
 ```
 
-参考 [frontend/.env.example](file:///Users/jason/Dev/crypto-projects/MyShop/frontend/.env.example)
+参考 [frontend/.env.example](../frontend/.env.example)
 
 ## 7. mD 验收清单（勾选）
 
@@ -152,7 +163,7 @@ VITE_WORKER_API_URL=
 - D3 SDK/地址源可用（前端通过部署配置或 env 读取地址）
 - D4 发布流程清晰（版本号、发布步骤、回滚策略）
 
-对应发布流程说明见 [milestones.md](file:///Users/jason/Dev/crypto-projects/MyShop/docs/milestones.md#L103-L182)
+对应发布流程说明见 [milestones.md](./milestones.md#L103-L182)
 
 ## 8. 常见问题
 
